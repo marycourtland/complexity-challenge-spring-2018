@@ -8,7 +8,6 @@ globals [
   payoff-history ;; PER AGENT
 
   ;; misc
-  nn
 ]
 
 turtles-own [
@@ -16,14 +15,13 @@ turtles-own [
   my-choice-history
   my-payoff-history
   my-cost-history
+  my-data
 
   strategy ;; nyi
 ]
 
 to setup
   clear-all
-
-  set nn 4
 
   set agent-history []
   set payoff-history []
@@ -37,6 +35,13 @@ to setup
     set my-choice-history []
     set my-payoff-history []
     set my-cost-history []
+
+    ;; Set the agent's strategy!
+
+    ;;ifelse (random-float 1) < p [ set strategy 0 ] [ set strategy 1 ]
+
+    set strategy who mod 4
+
   ]
 
   reset-ticks
@@ -45,7 +50,7 @@ end
 to go
   ;; Agents decide which pools to go to next
   ask turtles [
-    ifelse ticks = 0 [ pick-first-pool ] [ pick-next-pool ]
+    pick-next-pool
     move-to-pool
     deduct-move-cost
   ]
@@ -62,8 +67,6 @@ to go
   ask turtles [
     collect-payoff
   ]
-
-  ;;if ticks >= 100 [ stop ]
 
   tick
 end
@@ -87,6 +90,10 @@ end
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; HELPERS
 
+to-report random-pool
+  report one-of [0 1 2]
+end
+
 to-report record [history-list value]
   report insert-item 0 history-list value
 end
@@ -99,8 +106,23 @@ end
 
 to-report probability-if [prob value1 value2]
   let dice-roll random-float 1
-  ifelse prob < dice-roll [ report value1 ] [ report value2 ]
+  ifelse dice-roll < prob [ report value1 ] [ report value2 ]
 end
+
+;; similar to (sublist 0 n), but returns the whole list if the position > list length
+;; (instead of throwing error)
+to-report first-x-of [the-list x]
+  report sublist the-list 0 (min list x length the-list)
+end
+
+to-report payoff-history-for-pool [the-pool]
+  report map [ values -> item the-pool values] payoff-history
+end
+
+to-report agent-history-for-pool [the-pool]
+  report map [ values -> item the-pool values] agent-history
+end
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; SYSTEM MEASURES
@@ -121,11 +143,13 @@ to-report determine-current-payoff [pool-num]
 
   if pool-num = 1 [
     let total-winnings (probability-if 0.5 40 0)
+    if agent-count = 0 [ report total-winnings ]
     report total-winnings / agent-count
   ]
 
   if pool-num = 2 [
     let total-winnings (probability-if 0.25 80 0)
+    if agent-count = 0 [ report total-winnings ]
     report total-winnings / agent-count
   ]
 
@@ -135,19 +159,22 @@ end
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; TURTLES
 
-to pick-first-pool
-  set pool one-of [0 1 2]
-  set my-choice-history (record my-choice-history pool)
-end
-
 to pick-next-pool
   ;;set pool one-of [0 1 2]
 
-  set nn 4
-  if who mod nn = 0 [ set pool strategy-random ]
-  if who mod nn = 1 [ set pool strategy-sitting-duck 1 ]
-  if who mod nn = 2 [ set pool strategy-sitting-duck 2 ]
-  if who mod nn = 3 [ set pool strategy-check-last-round ]
+  ;;if strategy = 0 [ set pool strategy-sitting-duck 1 ]
+  ;;if strategy = 1 [ set pool strategy-sitting-duck 2 ]
+
+  ;;if strategy = 0 [ set pool strategy-sitting-duck 1 ]
+  ;;if strategy = 1 [ set pool strategy-random ]
+  ;;if strategy = 2 [ set pool strategy-random ]
+  ;;if strategy = 3 [ set pool strategy-check-last-round ]
+
+  ;;if strategy = 0 [ set pool strategy-favor-stable 5 10]
+  ;;if strategy = 1 [ set pool strategy-random ]
+
+  if strategy = 0 [ set pool strategy-favor-stable 2 7 ]
+  if strategy = 1 [ set pool strategy-random ]
 
   set my-choice-history (record my-choice-history pool)
 end
@@ -195,28 +222,53 @@ to-report strategy-sitting-duck [ the-pool ]
 end
 
 to-report strategy-random
-  report one-of [0 1 2]
+  report random-pool
 end
 
 to-report strategy-slow-random [ period ]
   ifelse ticks mod period = 0
-  [ report one-of [0 1 2] ]
+  [ report random-pool ]
   [ report pool ]
-end
-
-to-report strategy-stay
-  report pool
 end
 
 to-report strategy-check-last-round
   ;; pick the pool with the lowest population last time
   ;; note: if there's a tie, it will choose the lower risk round. (What if that was random?)
+  if ticks = 0 [ report random-pool ]
   let previous-counts first agent-history
   let min-pool position (min previous-counts) previous-counts
   report min-pool
 end
 
+to-report strategy-favor-stable [rest-min rest-max]
+  ;; my-data = X, where X is the number of rounds I'll stay in the stable pool. Should be > 2 to justify move costs
 
+  ;; define these here.. they might or might not get used
+  let new-X one-of (range rest-min rest-max)
+  let new-risk-pool one-of [1 2]
+
+  if ticks = 0 [
+    ;; initialize
+    set my-data new-X
+    report 0
+  ]
+  if pool = 0 [
+    let X my-data - 1 ;; decrement X
+    set my-data X
+    ifelse X != 0
+    [ report 0 ] ;; stay in stable until the X countdown has finished
+    [ report new-risk-pool ] ;; switch to one of the risk pools once X finishes
+  ]
+  if pool != 0 [
+    ;; If I'm currently in one of the risk pools, stay there until a payoff occurs.
+    ifelse first my-payoff-history > 0 [
+      set my-data new-X ;; restart countdown
+      report 0
+    ][
+      report pool ;; stay there
+    ]
+  ]
+end
 
 
 
@@ -225,7 +277,7 @@ end
 GRAPHICS-WINDOW
 210
 -228
-3323
+1073
 246
 -1
 -1
@@ -240,7 +292,7 @@ GRAPHICS-WINDOW
 1
 1
 0
-206
+56
 0
 30
 0
@@ -258,7 +310,7 @@ tau
 tau
 0
 1
-0.82
+0.95
 0.01
 1
 NIL
@@ -273,7 +325,7 @@ N
 N
 0
 200
-200.0
+50.0
 5
 1
 NIL
@@ -371,13 +423,13 @@ PENS
 MONITOR
 29
 509
-122
-554
+173
+582
 Total Wealth
 total-wealth
 1
 1
-11
+18
 
 PLOT
 537
@@ -439,6 +491,66 @@ PENS
 "group 1" 1.0 0 -14439633 true "" "plot sum [wealth] of turtles with [ who mod nn = 1 ]"
 "group 2" 1.0 0 -955883 true "" "plot sum [wealth] of turtles with [ who mod nn = 2 ]"
 "group 3" 1.0 0 -8630108 true "" "plot sum [wealth] of turtles with [ who mod nn = 3 ]"
+
+BUTTON
+22
+281
+207
+314
+Setup & Go 100 ticks
+setup\nrepeat 100 [ go ]
+NIL
+1
+T
+OBSERVER
+NIL
+NIL
+NIL
+NIL
+1
+
+BUTTON
+129
+112
+199
+145
+reset
+set tau 0.5\nset N 50
+NIL
+1
+T
+OBSERVER
+NIL
+NIL
+NIL
+NIL
+1
+
+MONITOR
+1059
+332
+1203
+405
+Mean wealth
+mean [wealth] of turtles
+2
+1
+18
+
+SLIDER
+1151
+12
+1323
+45
+p
+p
+0
+1
+1.0
+0.05
+1
+NIL
+HORIZONTAL
 
 @#$#@#$#@
 ## WHAT IS IT?
@@ -786,6 +898,40 @@ NetLogo 6.0.2
 @#$#@#$#@
 @#$#@#$#@
 @#$#@#$#@
+<experiments>
+  <experiment name="vary tau" repetitions="5" runMetricsEveryStep="true">
+    <setup>setup</setup>
+    <go>go</go>
+    <timeLimit steps="100"/>
+    <metric>total-wealth</metric>
+    <metric>sum [wealth] of turtles with [ strategy = 0 ]</metric>
+    <metric>sum [wealth] of turtles with [ strategy = 1 ]</metric>
+    <metric>sum [wealth] of turtles with [ strategy = 2 ]</metric>
+    <metric>sum [wealth] of turtles with [ strategy = 3 ]</metric>
+    <enumeratedValueSet variable="N">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <steppedValueSet variable="tau" first="0" step="0.05" last="1"/>
+    <enumeratedValueSet variable="p">
+      <value value="1"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="vary p, tau=0" repetitions="20" runMetricsEveryStep="true">
+    <setup>setup</setup>
+    <go>go</go>
+    <timeLimit steps="100"/>
+    <metric>total-wealth</metric>
+    <metric>sum [wealth] of turtles with [ strategy = 0 ]</metric>
+    <metric>sum [wealth] of turtles with [ strategy = 1 ]</metric>
+    <enumeratedValueSet variable="N">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="tau">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <steppedValueSet variable="p" first="0" step="0.05" last="1"/>
+  </experiment>
+</experiments>
 @#$#@#$#@
 @#$#@#$#@
 default
