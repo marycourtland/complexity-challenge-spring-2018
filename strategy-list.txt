@@ -1,0 +1,32 @@
+# Names of strategies I've implemented
+
+### Sitting Duck [ pool ]
+
+Sits in a single pool the whole time.
+
+### Random [ pool ]
+
+Sits in a single pool the whole time.
+
+
+### SlowRandom [ period ]
+
+Waits the given number of ticks, then switches to a random pool.
+
+
+### CheckLastRound
+
+Moves to whichever pool had fewest agents in the previous round. Technically adaptive but very bad!
+
+### FavorStable [ rest-min rest-max ]
+
+Stay in Stable for some number of turns (random between rest-min and rest-max). Then switch to a random risk pool. Wait until it pays off, then switch back to stable and repeat (with a new rest period between rest-min and rest-max).
+
+
+
+# Attributes
+
+Naive: does not take into consideration previous agent behavior.
+
+Adaptive: does depend on previous agent behavior.
+
