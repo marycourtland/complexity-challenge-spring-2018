@@ -1,6 +1,7 @@
 globals [
   ;; Each pool is represented by a row
   pool-height
+  pool-length ;; should be divisible by N
 
   ;; History lists of what happened each turn
   ;; shaped like [[x x x] [x x x] [x x x]]
@@ -16,6 +17,7 @@ turtles-own [
   my-payoff-history
   my-cost-history
   my-data
+  my-data-names
 
   strategy ;; nyi
 ]
@@ -36,12 +38,15 @@ to setup
     set my-payoff-history []
     set my-cost-history []
 
+    set my-data []
+    set my-data-names []
+
     ;; Set the agent's strategy!
 
     ;;ifelse (random-float 1) < p [ set strategy 0 ] [ set strategy 1 ]
 
-    set strategy who mod 4
-
+    set strategy who mod 2
+    ;;set strategy 1
   ]
 
   reset-ticks
@@ -74,7 +79,8 @@ end
 to display-world
   set-patch-size 15
   set pool-height 5
-  resize-world 0 (N + 6) 0 (pool-height * 3 * 2) ;; not sure why I need to multiply by 2...
+  set pool-length 20
+  resize-world 0 (pool-length + 6) 0 (pool-height * 3 * 2) ;; not sure why I need to multiply by 2...
 
   let pool-colors [green blue red]
   let pool-labels ["Pool 0: STABLE" "Pool 1: LOW" "Pool 2: HIGH"]
@@ -87,8 +93,10 @@ to display-world
   ]
 end
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; HELPERS
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; HELPER METHODS
+;;
 
 to-report random-pool
   report one-of [0 1 2]
@@ -124,15 +132,19 @@ to-report agent-history-for-pool [the-pool]
 end
 
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
 ;; SYSTEM MEASURES
+;;
 
 to-report total-wealth
   report sum [wealth] of turtles
 end
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
 ;; POOLS
+;;
 
 to-report determine-current-payoff [pool-num]
   let agent-count item pool-num (first agent-history) ;; it should've already been recorded now
@@ -156,8 +168,27 @@ to-report determine-current-payoff [pool-num]
   error "bad pool number?"
 end
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
 ;; TURTLES
+;;
+
+;; helpers to get named variables from 'my-data'... so that each strategy doesn't
+;; have to add its variables to the turtle local vars
+to-report get-data [name]
+  if not member? name my-data-names [ report 0 ]
+  let var-position position name my-data-names
+  report item var-position my-data
+end
+
+to set-data [name value]
+  if not member? name my-data-names [
+    set my-data-names lput name my-data-names
+    set my-data lput 0 my-data
+  ]
+  let var-position position name my-data-names
+  set my-data replace-item var-position my-data value
+end
 
 to pick-next-pool
   ;;set pool one-of [0 1 2]
@@ -173,14 +204,22 @@ to pick-next-pool
   ;;if strategy = 0 [ set pool strategy-favor-stable 5 10]
   ;;if strategy = 1 [ set pool strategy-random ]
 
-  if strategy = 0 [ set pool strategy-favor-stable 2 7 ]
+  ;;if strategy = 0 [ set pool strategy-favor-stable 2 7 ]
+  ;;if strategy = 1 [ set pool strategy-random ]
+
+
+  if strategy = 0 [ set pool predictive-strategy-1 ]
   if strategy = 1 [ set pool strategy-random ]
+
 
   set my-choice-history (record my-choice-history pool)
 end
 
 to move-to-pool
-  move-to patch (who + 7) (pool * pool-height)
+  let my-sub-row floor (who / pool-length)
+  let x 7 + (who mod pool-length)
+  let y (pool * pool-height) + my-sub-row
+  move-to patch x y
 end
 
 to deduct-move-cost
@@ -214,8 +253,10 @@ to-report choose-strategy-ID [ low-payoff high-payoff low-number high-number my-
 end
 
 
-;; here are some naive strategies
-;; TODO: refactor to fit the tournament template
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Naive agents
+;;
 
 to-report strategy-sitting-duck [ the-pool ]
   report the-pool
@@ -270,14 +311,93 @@ to-report strategy-favor-stable [rest-min rest-max]
   ]
 end
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Predictive and adaptive agensts
+;;
 
+to-report predictive-strategy-1
+  let S []
 
+  ifelse ticks = 0 [
+    ;; initialization: set up switching probabilities (3x3 matrix)
+    ;; set it up as, [ [column] [column] [column] ]
+    ;; each column i is:
+    ;; [
+    ;;   probability for an agent to switch from pool i to pool 0
+    ;;   probability for an agent to switch from pool i to pool 1
+    ;;   probability for an agent to switch from pool i to pool 2
+    ;; ]
 
+    set S n-values 3 [ n-values 3 [ random-float 1 ] ]
+
+    ;; normalize the columns (so that probabilities to 1)
+    foreach [0 1 2] [ col-num ->
+      let column item col-num S
+      let total sum column
+      let normalized-column map [ x -> x / total ] column
+      set S replace-item col-num S normalized-column
+    ]
+
+    ;; store the matrix for future ticks
+    set-data "S" S
+
+    ;; hmm...
+    report random-pool
+
+  ][
+    set S get-data "S"
+  ]
+
+  ;; this is: [
+  ;;   num agents in pool 0 last turn,
+  ;;   num agents in pool 1 last turn,
+  ;;   num agents in pool 2 last turn
+  ;; ]
+  let agents-previous-turn first agent-history
+
+  ;; dot product to get the predicted agents
+  ;; [AA] dot [xx] = [vv]
+  let AA S
+  let xx agents-previous-turn
+  let vv n-values 3 [ 0 ]
+  let matrix-cols range 3
+  let matrix-rows range 3
+  foreach matrix-rows [ row-num ->
+    foreach matrix-cols [ col-num ->
+      let matrix-col item col-num AA
+      let matrix-entry item row-num matrix-col
+      let vector-entry item col-num xx
+      let vv-entry item row-num vv
+      set vv (replace-item row-num vv (vv-entry + (matrix-entry * vector-entry)))
+    ]
+  ]
+
+  let agent-prediction vv
+
+  let payoff-prediction n-values 3 [ 0 ]
+  foreach range 3 [ pool-num ->
+    let payoff 0
+    if pool-num = 0 [ set payoff 1 ]
+    if pool-num = 1 [ set payoff 20 / (item 1 agent-prediction) ]
+    if pool-num = 2 [ set payoff 20 / (item 2 agent-prediction) ]
+    set payoff-prediction replace-item pool-num payoff-prediction payoff
+  ]
+
+  ;; discount tau from the payoff predictions
+  if pool != 0 [ set payoff-prediction replace-item 0 payoff-prediction (item 0 payoff-prediction - tau) ]
+  if pool != 1 [ set payoff-prediction replace-item 1 payoff-prediction (item 1 payoff-prediction - tau) ]
+  if pool != 2 [ set payoff-prediction replace-item 2 payoff-prediction (item 2 payoff-prediction - tau) ]
+
+  ;; let's go to the pool with highest predicted payoff
+  let max-payoff max payoff-prediction
+  report position max-payoff payoff-prediction
+end
 @#$#@#$#@
 GRAPHICS-WINDOW
 210
 -228
-1073
+623
 246
 -1
 -1
@@ -292,7 +412,7 @@ GRAPHICS-WINDOW
 1
 1
 0
-56
+26
 0
 30
 0
@@ -310,7 +430,7 @@ tau
 tau
 0
 1
-0.95
+1.0
 0.01
 1
 NIL
@@ -324,7 +444,7 @@ SLIDER
 N
 N
 0
-200
+100
 50.0
 5
 1
@@ -487,10 +607,10 @@ true
 true
 "" ""
 PENS
-"group 0" 1.0 0 -16777216 true "" "plot sum [wealth] of turtles with [ who mod nn = 0 ]"
-"group 1" 1.0 0 -14439633 true "" "plot sum [wealth] of turtles with [ who mod nn = 1 ]"
-"group 2" 1.0 0 -955883 true "" "plot sum [wealth] of turtles with [ who mod nn = 2 ]"
-"group 3" 1.0 0 -8630108 true "" "plot sum [wealth] of turtles with [ who mod nn = 3 ]"
+"group 0" 1.0 0 -16777216 true "" "plot sum [wealth] of turtles with [ strategy = 0 ]"
+"group 1" 1.0 0 -14439633 true "" "plot sum [wealth] of turtles with [ strategy = 1 ]"
+"group 2" 1.0 0 -955883 true "" "plot sum [wealth] of turtles with [ strategy = 2 ]"
+"group 3" 1.0 0 -8630108 true "" "plot sum [wealth] of turtles with [ strategy = 3 ]"
 
 BUTTON
 22
@@ -538,10 +658,10 @@ mean [wealth] of turtles
 18
 
 SLIDER
-1151
-12
-1323
-45
+726
+10
+898
+43
 p
 p
 0
