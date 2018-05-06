@@ -43,9 +43,9 @@ to setup
 
     ;; Set the agent's strategy!
 
-    ;;ifelse (random-float 1) < p [ set strategy 0 ] [ set strategy 1 ]
+    ifelse (random-float 1) < p [ set strategy 0 ] [ set strategy 1 ]
 
-    set strategy who mod 2
+    ;;set strategy who mod 2
     ;;set strategy 1
   ]
 
@@ -80,7 +80,7 @@ to display-world
   set-patch-size 15
   set pool-height 5
   set pool-length 20
-  resize-world 0 (pool-length + 6) 0 (pool-height * 3 * 2) ;; not sure why I need to multiply by 2...
+  resize-world 0 (pool-length + 6) 0 (pool-height * 3 ) ;; not sure why I need to multiply by 2...
 
   let pool-colors [green blue red]
   let pool-labels ["Pool 0: STABLE" "Pool 1: LOW" "Pool 2: HIGH"]
@@ -109,7 +109,11 @@ end
 ;; (get-for-pool current-payoffs 0) -> 1
 ;; (get-for-pool first payoff-history 0) -> 1
 to-report get-for-pool [pool-values-list pool-num]
-  report item pool-num pool-values-list
+  let pool-count 0
+  carefully [
+    set pool-count item pool-num pool-values-list
+  ][]
+  report pool-count
 end
 
 to-report probability-if [prob value1 value2]
@@ -131,6 +135,19 @@ to-report agent-history-for-pool [the-pool]
   report map [ values -> item the-pool values] agent-history
 end
 
+to-report recent-agent-history
+  ifelse length agent-history > 0
+  [ report first agent-history ]
+  [ report [0 0 0] ]
+end
+
+
+to plot-agents-wealth
+  ask turtles [
+    set-current-plot-pen (word who)
+    plot wealth
+  ]
+end
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
@@ -139,6 +156,44 @@ end
 
 to-report total-wealth
   report sum [wealth] of turtles
+end
+
+to-report information-entropy [ values possibilities ]
+  ;; estimate probabilities from the frequencies?
+  let counts n-values (length possibilities) [0]
+  let total length values
+
+  foreach values [v ->
+    let index position v possibilities
+    if (index = false) [ error "Value not in possibilities" ]
+    let current-count item index counts
+    let next-count (current-count + 1)
+    set counts replace-item index counts next-count
+  ]
+
+  let information -1 * sum (map [ current-count ->
+    ifelse-value (current-count = 0) [ 0 ] [
+      (current-count / total) * ln (current-count / total)
+    ]
+  ] counts)
+
+  report information
+end
+
+to-report mutual-information [values1 values2 possibilities]
+  let info1 information-entropy values1 possibilities
+  let info2 information-entropy values2 possibilities
+
+  let combo sentence values1 values2
+  let infoCombo information-entropy combo possibilities
+
+  report info1 + info2 - infoCombo
+end
+
+to-report agent-choices-mutual-information [agent1 agent2]
+  let choices1 [my-choice-history] of agent1
+  let choices2 [my-choice-history] of agent2
+  report mutual-information choices1 choices2 [0 1 2]
 end
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -208,9 +263,12 @@ to pick-next-pool
   ;;if strategy = 1 [ set pool strategy-random ]
 
 
-  if strategy = 0 [ set pool predictive-strategy-1 ]
-  if strategy = 1 [ set pool strategy-random ]
+  ;;if strategy = 0 [ set pool adaptive-strategy-1 ]
+  ;;if strategy = 0 [ set pool adaptive-strategy-1-stochastic 0.2 ]
+  ;;if strategy = 1 [ set pool strategy-favor-stable 5 10 ]
 
+  if strategy = 0 [ set pool adaptive-strategy-1 ]
+  if strategy = 1 [ set pool adaptive-strategy-2 ]
 
   set my-choice-history (record my-choice-history pool)
 end
@@ -313,10 +371,13 @@ end
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
-;; Predictive and adaptive agensts
+;; Predictive and adaptive agents
 ;;
 
-to-report predictive-strategy-1
+;; HELPER FUNCTIONS
+
+;; get S, matrix of probabilities for an agent to switch from pool i to pool j
+to-report get-switching-probabilities [var-name]
   let S []
 
   ifelse ticks = 0 [
@@ -340,65 +401,228 @@ to-report predictive-strategy-1
     ]
 
     ;; store the matrix for future ticks
-    set-data "S" S
-
-    ;; hmm...
-    report random-pool
-
+    if var-name != "" [ set-data var-name S ]
   ][
     set S get-data "S"
   ]
 
-  ;; this is: [
-  ;;   num agents in pool 0 last turn,
-  ;;   num agents in pool 1 last turn,
-  ;;   num agents in pool 2 last turn
-  ;; ]
-  let agents-previous-turn first agent-history
+  report S
+end
 
-  ;; dot product to get the predicted agents
-  ;; [AA] dot [xx] = [vv]
-  let AA S
-  let xx agents-previous-turn
-  let vv n-values 3 [ 0 ]
-  let matrix-cols range 3
-  let matrix-rows range 3
+to-report mutate-switching-probabilities [ S magnitude ]
+  let S-mutated []
+
+  foreach [0 1 2] [col-num ->
+    let column item col-num S
+
+    let m0 ((random-float 1) * 2 - 1) * magnitude
+    let m1 ((random-float 1) * 2 - 1) * magnitude
+    let m2 0 - m0 - m1
+
+    let mutated-column vector-add column (list m0 m1 m2)
+    set S-mutated lput mutated-column S-mutated
+  ]
+
+  report S-mutated
+end
+
+to-report calculate-my-possible-payoffs [agent-pool-counts]
+  let payoffs n-values 3 [ 0 ]
+  foreach range 3 [ pool-num ->
+    let agent-pool-count item pool-num agent-pool-counts
+    if agent-pool-count = 0 [ set agent-pool-count 1 ] ;; avoid div by zero
+    let payoff 0
+    if pool-num = 0 [ set payoff 1 ]
+    if pool-num = 1 [ set payoff 20 / agent-pool-count ] ;; expectation value
+    if pool-num = 2 [ set payoff 20 / agent-pool-count ] ;; expectation value
+    set payoffs replace-item pool-num payoffs payoff
+  ]
+
+  ;; discount tau from the payoffs
+  if pool != 0 [ set payoffs replace-item 0 payoffs (item 0 payoffs - tau) ]
+  if pool != 1 [ set payoffs replace-item 1 payoffs (item 1 payoffs - tau) ]
+  if pool != 2 [ set payoffs replace-item 2 payoffs (item 2 payoffs - tau) ]
+
+  report payoffs
+end
+
+
+to-report matrix-dot-vector [AA vv]
+  ;; matrix should be:  [ [column] [column] [column] ]
+  let matrix-cols range (length AA)
+  let matrix-rows range (length (item 0 AA))
+  let xx n-values (length AA) [ 0 ]
+
   foreach matrix-rows [ row-num ->
     foreach matrix-cols [ col-num ->
       let matrix-col item col-num AA
       let matrix-entry item row-num matrix-col
-      let vector-entry item col-num xx
-      let vv-entry item row-num vv
-      set vv (replace-item row-num vv (vv-entry + (matrix-entry * vector-entry)))
+      let vector-entry item col-num vv
+      let xx-entry item row-num xx
+      set xx (replace-item row-num xx (xx-entry + (matrix-entry * vector-entry)))
     ]
   ]
 
-  let agent-prediction vv
+  report xx
+end
 
-  let payoff-prediction n-values 3 [ 0 ]
-  foreach range 3 [ pool-num ->
-    let payoff 0
-    if pool-num = 0 [ set payoff 1 ]
-    if pool-num = 1 [ set payoff 20 / (item 1 agent-prediction) ]
-    if pool-num = 2 [ set payoff 20 / (item 2 agent-prediction) ]
-    set payoff-prediction replace-item pool-num payoff-prediction payoff
+to-report vector-add [uu vv]
+  ;; assume they are the same dimension
+  let xx []
+  foreach range length uu [ i ->
+    let uui item i uu
+    let vvi item i vv
+    set xx lput (uui + vvi) xx
   ]
+  report xx
+end
 
-  ;; discount tau from the payoff predictions
-  if pool != 0 [ set payoff-prediction replace-item 0 payoff-prediction (item 0 payoff-prediction - tau) ]
-  if pool != 1 [ set payoff-prediction replace-item 1 payoff-prediction (item 1 payoff-prediction - tau) ]
-  if pool != 2 [ set payoff-prediction replace-item 2 payoff-prediction (item 2 payoff-prediction - tau) ]
+to-report vector-diff [uu vv]
+  ;; assume they are the same dimension
+  let xx []
+  foreach range length uu [ i ->
+    let uui item i uu
+    let vvi item i vv
+    set xx lput (uui - vvi) xx
+  ]
+  report xx
+end
+
+to-report vector-sumsquares [vv]
+  let sumsquares 0
+  foreach range length vv [ i ->
+    let vvi item i vv
+    set sumsquares sumsquares + (vvi * vvi)
+  ]
+  report sumsquares
+end
+
+;; STRATEGIES
+
+to-report predictive-strategy-1
+  let S get-switching-probabilities ["S"]
+
+  if ticks = 0 [ report random-pool ]
+
+  let agents-previous-turn first agent-history
+  let agent-prediction matrix-dot-vector S agents-previous-turn
+  let payoff-prediction calculate-my-possible-payoffs agent-prediction
 
   ;; let's go to the pool with highest predicted payoff
   let max-payoff max payoff-prediction
   report position max-payoff payoff-prediction
 end
+
+;; Same as predictive-strategy-1 but keeps a bunch of options in its back pocket.
+to-report adaptive-strategy-1
+  ;;let num-variants 10
+  let S-variants []
+
+  ifelse ticks = 0 [
+    foreach range num-variants [
+      set S-variants lput (get-switching-probabilities [""]) S-variants
+    ]
+    set-data "S-variants" S-variants
+    set-data "S" first S-variants
+  ][
+    set S-variants get-data "S-variants"
+  ]
+
+  if ticks = 0 [ report random-pool ]
+  if ticks = 1 [ report predictive-strategy-1 ] ;; this will use the first S matrix and also set it
+
+  let S-min-error get-data "S"
+  let min-error 9999
+
+  ;; Check previous two rounds, and retroactively see which S matrix would have been best
+  let agents-turn-1 first but-first agent-history
+  let agents-turn-2 first agent-history
+
+  ;; see what the max payoff would have been
+  let actual-payoffs calculate-my-possible-payoffs agents-turn-2
+  let actual-max-payoff max actual-payoffs
+
+  foreach S-variants [ S ->
+
+    ;; simulate prediction with this S
+    let agents-predicted-turn-2 matrix-dot-vector S agents-turn-1
+    let payoff-prediction calculate-my-possible-payoffs agents-predicted-turn-2
+
+    let prediction-error vector-sumsquares (vector-diff agents-predicted-turn-2 agents-turn-2)
+
+    if prediction-error < min-error [
+      set min-error prediction-error
+      set S-min-error S
+    ]
+    ;; ...
+
+    ;;let predicted-max-payoff max payoff-prediction
+    ;;let chosen-position position predicted-max-payoff payoff-prediction
+
+    ;; if this S gave us the max payoff, then mark it as a good one to be used
+    ;;if predicted-max-payoff = actual-max-payoff [
+    ;;  set S-best-choices lput S S-best-choices
+    ;;]
+  ]
+
+  set-data "error" min-error
+  set-data "S" S-min-error
+  let S S-min-error
+
+  ;;if length S-best-choices > 0 [
+  ;;  set S one-of S-best-choices
+  ;;  set-data "S" S
+  ;;]
+
+  ;; now use this S matrix for our next choice
+
+  let agents-previous-turn first agent-history
+  let agent-prediction matrix-dot-vector S agents-previous-turn
+  let payoff-prediction calculate-my-possible-payoffs agent-prediction
+
+  ;; let's go to the pool with highest predicted payoff
+  let max-payoff max payoff-prediction
+  report position max-payoff payoff-prediction
+end
+
+;; Same as predictive-strategy-1 but with some stochasticity.
+to-report adaptive-strategy-1-stochastic [random-probability]
+  if ticks <= 2 [ report adaptive-strategy-1 ]
+
+  ifelse (random-float 1) < random-probability [
+    report random-pool
+  ] [
+    report adaptive-strategy-1
+  ]
+end
+
+
+;; Same as predictive-strategy-1 but does some genetic variance of the strategies in its list
+to-report adaptive-strategy-2
+  if ticks < 2 [ report adaptive-strategy-1 ] ;; don't start varying S choices until tick 2
+
+  let choice adaptive-strategy-1
+
+  ;; replace some S choices with variants of my latest used S
+  let num-replacements floor num-variants * percent-to-replace
+  let indices-to-replace n-of num-replacements range num-variants
+  let S-variants get-data "S-variants"
+  let S get-data "S"
+
+  foreach indices-to-replace [ i ->
+    let mutated mutate-switching-probabilities S mutation-magnitude
+    set S-variants replace-item i S-variants mutated
+  ]
+  set-data "S-variants" S-variants
+
+  report choice
+end
 @#$#@#$#@
 GRAPHICS-WINDOW
-210
--228
-623
-246
+15
+520
+428
+769
 -1
 -1
 15.0
@@ -414,7 +638,7 @@ GRAPHICS-WINDOW
 0
 26
 0
-30
+15
 0
 0
 1
@@ -430,7 +654,7 @@ tau
 tau
 0
 1
-1.0
+0.5
 0.01
 1
 NIL
@@ -453,9 +677,9 @@ HORIZONTAL
 
 BUTTON
 16
-137
+350
 90
-170
+383
 Setup
 setup
 NIL
@@ -469,10 +693,10 @@ NIL
 1
 
 BUTTON
-17
-186
-90
-219
+16
+397
+89
+430
 Go
 go
 T
@@ -486,10 +710,10 @@ NIL
 1
 
 BUTTON
-19
-236
-116
-269
+106
+396
+203
+429
 Go 1 Tick
 go
 NIL
@@ -503,10 +727,10 @@ NIL
 1
 
 PLOT
-27
-331
-227
-481
+749
+374
+989
+539
 Total Wealth
 Rounds
 Wealth
@@ -521,30 +745,30 @@ PENS
 "default" 1.0 0 -16777216 true "" "plot total-wealth"
 
 PLOT
-274
-331
-474
-481
+794
+30
+1349
+199
 Agents choosing each pool
 Round
 Number of agents
 0.0
 100.0
 0.0
-100.0
+50.0
 true
 false
 "" ""
 PENS
-"pen-0" 1.0 0 -10899396 true "" "carefully [ plot get-for-pool first agent-history 0 ] []"
-"pen-1" 1.0 0 -13345367 true "" "carefully [ plot get-for-pool first agent-history 1 ] []"
-"pen-2" 1.0 0 -2674135 true "" "carefully [ plot get-for-pool first agent-history 2 ] []"
+"pen-0" 1.0 0 -10899396 true "" "plot get-for-pool recent-agent-history 0"
+"pen-1" 1.0 0 -13345367 true "" "plot get-for-pool recent-agent-history 1"
+"pen-2" 1.0 0 -2674135 true "" "plot get-for-pool recent-agent-history 2"
 
 MONITOR
-29
-509
-173
-582
+1030
+465
+1174
+538
 Total Wealth
 total-wealth
 1
@@ -552,32 +776,10 @@ total-wealth
 18
 
 PLOT
-537
-331
-737
-481
-Five sample agents
-NIL
-NIL
-0.0
-10.0
-0.0
-10.0
-true
-false
-"" ""
-PENS
-"default" 1.0 0 -16777216 true "" "plot [wealth] of turtle 0"
-"pen-1" 1.0 0 -7500403 true "" "plot [wealth] of turtle 1"
-"pen-2" 1.0 0 -2674135 true "" "plot [wealth] of turtle 2"
-"pen-3" 1.0 0 -955883 true "" "plot [wealth] of turtle 3"
-"pen-4" 1.0 0 -6459832 true "" "plot [wealth] of turtle 4"
-
-PLOT
-807
-334
-1007
-484
+1227
+382
+1427
+532
 Wealth distribution
 NIL
 NIL
@@ -592,11 +794,11 @@ PENS
 "default" 1.0 1 -16777216 true "" "histogram [wealth] of turtles"
 
 PLOT
-537
-512
-1020
-697
-Wealth by group
+225
+302
+708
+487
+Wealth by group (per turtle)
 NIL
 NIL
 0.0
@@ -607,16 +809,16 @@ true
 true
 "" ""
 PENS
-"group 0" 1.0 0 -16777216 true "" "plot sum [wealth] of turtles with [ strategy = 0 ]"
-"group 1" 1.0 0 -14439633 true "" "plot sum [wealth] of turtles with [ strategy = 1 ]"
-"group 2" 1.0 0 -955883 true "" "plot sum [wealth] of turtles with [ strategy = 2 ]"
-"group 3" 1.0 0 -8630108 true "" "plot sum [wealth] of turtles with [ strategy = 3 ]"
+"group 0" 1.0 0 -8431303 true "" "plot (sum [wealth] of turtles with [ strategy = 0 ]) / (count turtles with [strategy = 0])"
+"group 1" 1.0 0 -13840069 true "" "plot (sum [wealth] of turtles with [ strategy = 1 ]) / (count turtles with [strategy = 1])"
+"group 2" 1.0 0 -13791810 true "" "plot (sum [wealth] of turtles with [ strategy = 2 ]) / (count turtles with [strategy = 2])"
+"group 3" 1.0 0 -5825686 true "" "plot (sum [wealth] of turtles with [ strategy = 3 ]) / (count turtles with [strategy = 3])"
 
 BUTTON
-22
-281
-207
-314
+18
+445
+203
+478
 Setup & Go 100 ticks
 setup\nrepeat 100 [ go ]
 NIL
@@ -630,10 +832,10 @@ NIL
 1
 
 BUTTON
-129
-112
-199
-145
+131
+350
+201
+383
 reset
 set tau 0.5\nset N 50
 NIL
@@ -647,10 +849,10 @@ NIL
 1
 
 MONITOR
-1059
-332
-1203
-405
+1027
+374
+1171
+447
 Mean wealth
 mean [wealth] of turtles
 2
@@ -658,15 +860,98 @@ mean [wealth] of turtles
 18
 
 SLIDER
-726
-10
-898
-43
+15
+121
+187
+154
 p
 p
 0
 1
+0.0
+0.05
+1
+NIL
+HORIZONTAL
+
+PLOT
+225
+31
+734
+286
+Individual agents wealth
+NIL
+NIL
+0.0
+10.0
+0.0
+10.0
+true
+false
+"ask turtles [\ncreate-temporary-plot-pen (word who)\n]" "ask turtles [\n    set-current-plot-pen (word who)\n    set-plot-pen-color ((strategy + 1) * 30 + 4)\n    plot wealth\n  ]"
+PENS
+"default" 1.0 0 -16777216 true "" ""
+
+SLIDER
+16
+207
+188
+240
+num-variants
+num-variants
+0
+20
+8.0
+1
+1
+NIL
+HORIZONTAL
+
+PLOT
+794
+209
+1352
+329
+Payoff per pool
+NIL
+NIL
+0.0
+100.0
+0.0
 1.0
+true
+false
+"" ""
+PENS
+"default" 1.0 0 -13840069 true "" "plot item 0 (first payoff-history)"
+"pen-1" 1.0 0 -13345367 true "" "plot item 1 (first payoff-history)"
+"pen-2" 1.0 0 -2674135 true "" "plot item 2 (first payoff-history)"
+
+SLIDER
+15
+252
+190
+285
+percent-to-replace
+percent-to-replace
+0
+1
+0.2
+0.1
+1
+NIL
+HORIZONTAL
+
+SLIDER
+15
+298
+192
+331
+mutation-magnitude
+mutation-magnitude
+0
+0.5
+0.2
 0.05
 1
 NIL
@@ -1050,6 +1335,52 @@ NetLogo 6.0.2
       <value value="0"/>
     </enumeratedValueSet>
     <steppedValueSet variable="p" first="0" step="0.05" last="1"/>
+  </experiment>
+  <experiment name="vary tau, measure pool choices" repetitions="5" runMetricsEveryStep="true">
+    <setup>setup</setup>
+    <go>go</go>
+    <timeLimit steps="100"/>
+    <metric>total-wealth</metric>
+    <metric>get-for-pool recent-agent-history 0</metric>
+    <metric>get-for-pool recent-agent-history 1</metric>
+    <metric>get-for-pool recent-agent-history 2</metric>
+    <enumeratedValueSet variable="N">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <steppedValueSet variable="tau" first="0" step="0.05" last="1"/>
+    <enumeratedValueSet variable="p">
+      <value value="1"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="vary tau and p" repetitions="5" runMetricsEveryStep="true">
+    <setup>setup</setup>
+    <go>go</go>
+    <timeLimit steps="100"/>
+    <metric>total-wealth</metric>
+    <metric>sum [wealth] of turtles with [ strategy = 0 ]</metric>
+    <metric>sum [wealth] of turtles with [ strategy = 1 ]</metric>
+    <metric>sum [wealth] of turtles with [ strategy = 2 ]</metric>
+    <metric>sum [wealth] of turtles with [ strategy = 3 ]</metric>
+    <enumeratedValueSet variable="N">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <steppedValueSet variable="tau" first="0" step="0.05" last="1"/>
+    <steppedValueSet variable="p" first="0" step="0.05" last="1"/>
+  </experiment>
+  <experiment name="vary tau and num-variants" repetitions="5" runMetricsEveryStep="true">
+    <setup>setup</setup>
+    <go>go</go>
+    <timeLimit steps="100"/>
+    <metric>total-wealth</metric>
+    <metric>sum [wealth] of turtles with [ strategy = 0 ]</metric>
+    <enumeratedValueSet variable="N">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <steppedValueSet variable="tau" first="0" step="0.05" last="1"/>
+    <enumeratedValueSet variable="p">
+      <value value="1"/>
+    </enumeratedValueSet>
+    <steppedValueSet variable="num-variants" first="0" step="1" last="20"/>
   </experiment>
 </experiments>
 @#$#@#$#@
