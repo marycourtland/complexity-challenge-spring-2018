@@ -2,6 +2,8 @@ globals [
   ;; Each pool is represented by a row
   pool-height
   pool-length ;; should be divisible by N
+  left-margin
+  x-step-size
 
   ;; History lists of what happened each turn
   ;; shaped like [[x x x] [x x x] [x x x]]
@@ -82,17 +84,18 @@ end
 to display-world
   set-patch-size 15
   set pool-height 5
-  set pool-length 20
-  resize-world 0 (pool-length + 6) 0 (pool-height * 3 ) ;; not sure why I need to multiply by 2...
+  ;;set pool-length 20
+  set pool-length x-step-size * 100
+  resize-world 0 (pool-length + left-margin) 0 (pool-height * 3 )
 
   let pool-colors [green blue red]
   let pool-labels ["Pool 0: STABLE" "Pool 1: LOW" "Pool 2: HIGH"]
 
   ;; color the rows representing pools
   foreach [0 1 2] [ pool-num ->
-    let pool-patches patches with [pxcor > 6 and (pycor >= (pool-num * pool-height) and pycor <= ((pool-num + 1) * pool-height))]
+    let pool-patches patches with [pxcor > left-margin and (pycor >= (pool-num * pool-height) and pycor <= ((pool-num + 1) * pool-height))]
     ask pool-patches [ set pcolor (item pool-num pool-colors) ]
-    ask patch 5 (pool-num * pool-height) [ set plabel (item pool-num pool-labels) ]
+    ask patch (left-margin - 1) (pool-num * pool-height) [ set plabel (item pool-num pool-labels) ]
   ]
 end
 
@@ -307,8 +310,19 @@ to pick-next-pool
   set my-choice-history (record my-choice-history pool)
 end
 
-
 to move-to-pool
+  pen-down
+  let new-x (xcor + x-step-size)
+  let new-y (pool * pool-height) + (random pool-height)
+  if ((ticks > 1) and (first my-choice-history) = (first (but-first my-choice-history))) [
+    set new-y (pool * pool-height)
+  ]
+  let dist distancexy new-x new-y
+  facexy new-x new-y
+  fd dist
+end
+
+to move-to-pool-1
   let my-sub-row floor (who / pool-length)
   let x 7 + (who mod pool-length)
   let y (pool * pool-height) + my-sub-row
@@ -682,12 +696,18 @@ to-report strategy-turn-taker
   if ticks mod N = turn-for-H [ report 2 ]
   report 0
 end
+
+
+
+to-report strategy-weighted-history [memory-size]
+  report 0
+end
 @#$#@#$#@
 GRAPHICS-WINDOW
-15
-520
-428
-769
+327
+10
+350
+259
 -1
 -1
 15.0
@@ -697,11 +717,11 @@ GRAPHICS-WINDOW
 1
 1
 0
-1
-1
+0
+0
 1
 0
-26
+0
 0
 15
 0
@@ -940,10 +960,10 @@ NIL
 HORIZONTAL
 
 PLOT
-225
-31
-734
-286
+809
+562
+1318
+817
 Individual agents wealth
 NIL
 NIL
