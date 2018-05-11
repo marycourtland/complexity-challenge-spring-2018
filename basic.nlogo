@@ -22,6 +22,7 @@ turtles-own [
   strategy ;; nyi
 ]
 
+
 to setup
   clear-all
 
@@ -30,7 +31,7 @@ to setup
 
   display-world
 
-  set-default-shape turtles "person"
+  set-default-shape turtles "bug"
 
   create-turtles N [
     set color white
@@ -43,7 +44,9 @@ to setup
 
     ;; Set the agent's strategy!
 
-    ifelse (random-float 1) < p [ set strategy 0 ] [ set strategy 1 ]
+    ;;ifelse (random-float 1) < p [ set strategy 0 ] [ set strategy 1 ]
+
+    set strategy one-of range 10
 
     ;;set strategy who mod 2
     ;;set strategy 1
@@ -158,6 +161,16 @@ to-report total-wealth
   report sum [wealth] of turtles
 end
 
+to-report agent-variance
+  let min-rounds 10
+  if ticks < min-rounds [ report 0 ]
+  let recent-counts sublist agent-history 0 min-rounds
+  let recent-pool-0 map [turn-counts -> item 0 turn-counts] recent-counts
+  let recent-pool-1 map [turn-counts -> item 1 turn-counts] recent-counts
+  let recent-pool-2 map [turn-counts -> item 2 turn-counts] recent-counts
+  report mean (list (variance recent-pool-0) (variance recent-pool-1) (variance recent-pool-2))
+end
+
 to-report information-entropy [ values possibilities ]
   ;; estimate probabilities from the frequencies?
   let counts n-values (length possibilities) [0]
@@ -194,6 +207,12 @@ to-report agent-choices-mutual-information [agent1 agent2]
   let choices1 [my-choice-history] of agent1
   let choices2 [my-choice-history] of agent2
   report mutual-information choices1 choices2 [0 1 2]
+end
+
+;; Individual turtle measures
+
+to-report stable-choice-percent
+  report (length filter [i -> i = 0] my-choice-history) / (length my-choice-history)
 end
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -248,6 +267,17 @@ end
 to pick-next-pool
   ;;set pool one-of [0 1 2]
 
+  if strategy = 0 [ set pool strategy-random ]
+  if strategy = 1 [ set pool strategy-sitting-duck 0 ]
+  if strategy = 2 [ set pool strategy-sitting-duck 1 ]
+  if strategy = 3 [ set pool strategy-sitting-duck 2 ]
+  if strategy = 4 [ set pool strategy-slow-random 5 ]
+  if strategy = 5 [ set pool strategy-check-last-round ]
+  if strategy = 6 [ set pool strategy-favor-stable 5 10]
+  if strategy = 7 [ set pool adaptive-strategy-1 ]
+  if strategy = 8 [ set pool adaptive-strategy-2 ]
+  if strategy = 9 [ set pool strategy-turn-taker ]
+
   ;;if strategy = 0 [ set pool strategy-sitting-duck 1 ]
   ;;if strategy = 1 [ set pool strategy-sitting-duck 2 ]
 
@@ -267,11 +297,16 @@ to pick-next-pool
   ;;if strategy = 0 [ set pool adaptive-strategy-1-stochastic 0.2 ]
   ;;if strategy = 1 [ set pool strategy-favor-stable 5 10 ]
 
-  if strategy = 0 [ set pool adaptive-strategy-1 ]
-  if strategy = 1 [ set pool adaptive-strategy-2 ]
+  ;;if strategy = 0 [ set pool adaptive-strategy-1 ]
+  ;;if strategy = 1 [ set pool adaptive-strategy-2 ]
+
+  ;;if strategy = 0 [ set pool strategy-turn-taker ]
+  ;;if strategy = 0 [ set pool strategy-favor-stable 5 10 ]
+  ;;if strategy = 1 [ set pool adaptive-strategy-2 ]
 
   set my-choice-history (record my-choice-history pool)
 end
+
 
 to move-to-pool
   let my-sub-row floor (who / pool-length)
@@ -308,6 +343,63 @@ to-report choose-strategy-ID [ low-payoff high-payoff low-number high-number my-
   ;;CODE CODE CODE CODE
   let pool_ 1
   report pool_
+end
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Vector / matrix helper functions
+;;
+
+to-report matrix-dot-vector [AA vv]
+  ;; matrix should be:  [ [column] [column] [column] ]
+  let matrix-cols range (length AA)
+  let matrix-rows range (length (item 0 AA))
+  let xx n-values (length AA) [ 0 ]
+
+  foreach matrix-rows [ row-num ->
+    foreach matrix-cols [ col-num ->
+      let matrix-col item col-num AA
+      let matrix-entry item row-num matrix-col
+      let vector-entry item col-num vv
+      let xx-entry item row-num xx
+      set xx (replace-item row-num xx (xx-entry + (matrix-entry * vector-entry)))
+    ]
+  ]
+
+  report xx
+end
+
+to-report vector-add [uu vv]
+  ;; assume they are the same dimension
+  let xx []
+  foreach range length uu [ i ->
+    let uui item i uu
+    let vvi item i vv
+    set xx lput (uui + vvi) xx
+  ]
+  report xx
+end
+
+
+to-report vector-diff [uu vv]
+  ;; assume they are the same dimension
+  let xx []
+  foreach range length uu [ i ->
+    let uui item i uu
+    let vvi item i vv
+    set xx lput (uui - vvi) xx
+  ]
+  report xx
+end
+
+to-report vector-sumsquares [vv]
+  let sumsquares 0
+  foreach range length vv [ i ->
+    let vvi item i vv
+    set sumsquares sumsquares + (vvi * vvi)
+  ]
+  report sumsquares
 end
 
 
@@ -446,57 +538,6 @@ to-report calculate-my-possible-payoffs [agent-pool-counts]
   report payoffs
 end
 
-
-to-report matrix-dot-vector [AA vv]
-  ;; matrix should be:  [ [column] [column] [column] ]
-  let matrix-cols range (length AA)
-  let matrix-rows range (length (item 0 AA))
-  let xx n-values (length AA) [ 0 ]
-
-  foreach matrix-rows [ row-num ->
-    foreach matrix-cols [ col-num ->
-      let matrix-col item col-num AA
-      let matrix-entry item row-num matrix-col
-      let vector-entry item col-num vv
-      let xx-entry item row-num xx
-      set xx (replace-item row-num xx (xx-entry + (matrix-entry * vector-entry)))
-    ]
-  ]
-
-  report xx
-end
-
-to-report vector-add [uu vv]
-  ;; assume they are the same dimension
-  let xx []
-  foreach range length uu [ i ->
-    let uui item i uu
-    let vvi item i vv
-    set xx lput (uui + vvi) xx
-  ]
-  report xx
-end
-
-to-report vector-diff [uu vv]
-  ;; assume they are the same dimension
-  let xx []
-  foreach range length uu [ i ->
-    let uui item i uu
-    let vvi item i vv
-    set xx lput (uui - vvi) xx
-  ]
-  report xx
-end
-
-to-report vector-sumsquares [vv]
-  let sumsquares 0
-  foreach range length vv [ i ->
-    let vvi item i vv
-    set sumsquares sumsquares + (vvi * vvi)
-  ]
-  report sumsquares
-end
-
 ;; STRATEGIES
 
 to-report predictive-strategy-1
@@ -617,6 +658,30 @@ to-report adaptive-strategy-2
 
   report choice
 end
+
+
+to-report strategy-turn-taker
+  ;; The gist of this strategy is: each agent using this strategy will pick one turn
+  ;; to go to the low pool, and one turn to go to the high pool. (Both with uniform
+  ;; random probability.) This ensures that not-very-many agents per turn will go to
+  ;; low or high.
+  ;; Since the game will last for more than N turns, the agent will go to the pool if
+  ;; it's their turn, modulo N.
+
+  if ticks = 0 [
+    set-data "turn-for-L" random N
+    set-data "turn-for-H" random N
+  ]
+  let turn-for-L get-data "turn-for-L"
+  let turn-for-H get-data "turn-for-H"
+
+  ;; make sure one pool isn't favored if the turns are the same
+  if (turn-for-L = turn-for-H) and (ticks mod N = turn-for-L) [ report one-of [1 2] ]
+
+  if ticks mod N = turn-for-L [ report 1 ]
+  if ticks mod N = turn-for-H [ report 2 ]
+  report 0
+end
 @#$#@#$#@
 GRAPHICS-WINDOW
 15
@@ -654,7 +719,7 @@ tau
 tau
 0
 1
-0.5
+0.0
 0.01
 1
 NIL
@@ -727,10 +792,10 @@ NIL
 1
 
 PLOT
-749
-374
-989
-539
+530
+302
+767
+486
 Total Wealth
 Rounds
 Wealth
@@ -765,10 +830,10 @@ PENS
 "pen-2" 1.0 0 -2674135 true "" "plot get-for-pool recent-agent-history 2"
 
 MONITOR
-1030
-465
-1174
-538
+622
+520
+766
+593
 Total Wealth
 total-wealth
 1
@@ -776,10 +841,10 @@ total-wealth
 18
 
 PLOT
-1227
-382
-1427
-532
+1149
+377
+1349
+527
 Wealth distribution
 NIL
 NIL
@@ -796,7 +861,7 @@ PENS
 PLOT
 225
 302
-708
+522
 487
 Wealth by group (per turtle)
 NIL
@@ -820,7 +885,7 @@ BUTTON
 203
 478
 Setup & Go 100 ticks
-setup\nrepeat 100 [ go ]
+setup\nrepeat 100 [ go ]\nshow map [i -> precision ((mean [wealth] of turtles with [strategy = i]) / ticks) 3 ] range 10
 NIL
 1
 T
@@ -849,10 +914,10 @@ NIL
 1
 
 MONITOR
-1027
-374
-1171
-447
+459
+521
+603
+594
 Mean wealth
 mean [wealth] of turtles
 2
@@ -901,7 +966,7 @@ num-variants
 num-variants
 0
 20
-8.0
+1.0
 1
 1
 NIL
@@ -936,7 +1001,7 @@ percent-to-replace
 percent-to-replace
 0
 1
-0.2
+1.0
 0.1
 1
 NIL
@@ -951,11 +1016,29 @@ mutation-magnitude
 mutation-magnitude
 0
 0.5
-0.2
+1.0
 0.05
 1
 NIL
 HORIZONTAL
+
+PLOT
+801
+376
+1121
+526
+Agent variance, last 10 turns
+NIL
+NIL
+0.0
+10.0
+0.0
+10.0
+true
+false
+"" ""
+PENS
+"default" 1.0 0 -16777216 true "" "plot agent-variance"
 
 @#$#@#$#@
 ## WHAT IS IT?
@@ -1373,14 +1456,83 @@ NetLogo 6.0.2
     <timeLimit steps="100"/>
     <metric>total-wealth</metric>
     <metric>sum [wealth] of turtles with [ strategy = 0 ]</metric>
+    <metric>agent-variance</metric>
     <enumeratedValueSet variable="N">
       <value value="50"/>
     </enumeratedValueSet>
     <steppedValueSet variable="tau" first="0" step="0.05" last="1"/>
     <enumeratedValueSet variable="p">
-      <value value="1"/>
+      <value value="0"/>
     </enumeratedValueSet>
     <steppedValueSet variable="num-variants" first="0" step="1" last="20"/>
+    <enumeratedValueSet variable="percent-to-replace">
+      <value value="0.2"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="mutation-magnitude">
+      <value value="0.2"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="vary tau and percent-to-replace" repetitions="5" runMetricsEveryStep="true">
+    <setup>setup</setup>
+    <go>go</go>
+    <timeLimit steps="100"/>
+    <metric>total-wealth</metric>
+    <metric>sum [wealth] of turtles with [ strategy = 0 ]</metric>
+    <metric>agent-variance</metric>
+    <enumeratedValueSet variable="N">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <steppedValueSet variable="tau" first="0" step="0.05" last="1"/>
+    <enumeratedValueSet variable="p">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="num-variants">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <steppedValueSet variable="percent-to-replace" first="0" step="0.05" last="1"/>
+    <enumeratedValueSet variable="mutation-magnitude">
+      <value value="0.2"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="vary tau, N" repetitions="5" runMetricsEveryStep="true">
+    <setup>setup</setup>
+    <go>go</go>
+    <timeLimit steps="100"/>
+    <metric>total-wealth</metric>
+    <metric>sum [wealth] of turtles with [ strategy = 0 ]</metric>
+    <metric>sum [wealth] of turtles with [ strategy = 1 ]</metric>
+    <metric>sum [wealth] of turtles with [ strategy = 2 ]</metric>
+    <metric>sum [wealth] of turtles with [ strategy = 3 ]</metric>
+    <steppedValueSet variable="N" first="20" step="10" last="100"/>
+    <steppedValueSet variable="tau" first="0" step="0.05" last="1"/>
+    <enumeratedValueSet variable="p">
+      <value value="1"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="vary mutation-magnitude" repetitions="5" runMetricsEveryStep="true">
+    <setup>setup</setup>
+    <go>go</go>
+    <timeLimit steps="100"/>
+    <metric>total-wealth</metric>
+    <metric>get-for-pool recent-agent-history 0</metric>
+    <metric>get-for-pool recent-agent-history 1</metric>
+    <metric>get-for-pool recent-agent-history 2</metric>
+    <enumeratedValueSet variable="percent-to-replace">
+      <value value="1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="N">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <steppedValueSet variable="mutation-magnitude" first="0" step="0.05" last="1"/>
+    <enumeratedValueSet variable="tau">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="p">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="num-variants">
+      <value value="1"/>
+    </enumeratedValueSet>
   </experiment>
 </experiments>
 @#$#@#$#@
