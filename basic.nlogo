@@ -4,6 +4,9 @@ globals [
   pool-length ;; should be divisible by N
   left-margin
   x-step-size
+  strategy-colors
+
+  num-strategies
 
   ;; History lists of what happened each turn
   ;; shaped like [[x x x] [x x x] [x x x]]
@@ -27,6 +30,7 @@ turtles-own [
 
 to setup
   clear-all
+  set num-strategies 16
 
   set agent-history []
   set payoff-history []
@@ -46,9 +50,9 @@ to setup
 
     ;; Set the agent's strategy!
 
-    ;;ifelse (random-float 1) < p [ set strategy 0 ] [ set strategy 1 ]
+    ifelse (random-float 1) < p [ set strategy 4 ] [ set strategy 8 ]
 
-    set strategy one-of range 10
+    ;;set strategy one-of range 10
 
     ;;set strategy who mod 2
     ;;set strategy 1
@@ -73,6 +77,8 @@ to go
   let current-payoffs map determine-current-payoff [0 1 2]
   set payoff-history (record payoff-history current-payoffs)
 
+  display-payoff-on-patches
+
   ;; Agents get their reward
   ask turtles [
     collect-payoff
@@ -82,20 +88,37 @@ to go
 end
 
 to display-world
+  set left-margin 6
+  set x-step-size 1
   set-patch-size 15
   set pool-height 5
   ;;set pool-length 20
   set pool-length x-step-size * 100
   resize-world 0 (pool-length + left-margin) 0 (pool-height * 3 )
 
-  let pool-colors [green blue red]
+  ;;let pool-colors [green blue red]
+  let pool-colors [68 108 18]
   let pool-labels ["Pool 0: STABLE" "Pool 1: LOW" "Pool 2: HIGH"]
+
+  ;; for plotting strategies etc
+  set strategy-colors [22 32 42 72 82 112 122 132 25 35 45 75 85 115 125 135]
 
   ;; color the rows representing pools
   foreach [0 1 2] [ pool-num ->
-    let pool-patches patches with [pxcor > left-margin and (pycor >= (pool-num * pool-height) and pycor <= ((pool-num + 1) * pool-height))]
+    let pool-patches patches with [pxcor > left-margin and (pycor >= (pool-num * pool-height) and pycor < ((pool-num + 1) * pool-height))]
     ask pool-patches [ set pcolor (item pool-num pool-colors) ]
     ask patch (left-margin - 1) (pool-num * pool-height) [ set plabel (item pool-num pool-labels) ]
+  ]
+end
+
+to display-payoff-on-patches
+  ;; show if low and high pools got lucky this turn.
+  let pool-colors [67 107 17]
+  foreach [1 2] [ pool-num ->
+    if item pool-num first payoff-history > 0 [
+      let pool-patches patches with [pxcor = (left-margin + 1 + ticks * x-step-size) and (pycor >= (pool-num * pool-height) and pycor < ((pool-num + 1) * pool-height))]
+      ask pool-patches [ set pcolor (item pool-num pool-colors) ]
+    ]
   ]
 end
 
@@ -162,6 +185,10 @@ end
 
 to-report total-wealth
   report sum [wealth] of turtles
+end
+
+to-report wealth-per-turtle-with-strategy [the-strategy]
+  report (sum [wealth] of turtles with [ strategy = the-strategy ]) / (count turtles with [strategy = the-strategy])
 end
 
 to-report agent-variance
@@ -311,15 +338,24 @@ to pick-next-pool
 end
 
 to move-to-pool
-  pen-down
   let new-x (xcor + x-step-size)
-  let new-y (pool * pool-height) + (random pool-height)
-  if ((ticks > 1) and (first my-choice-history) = (first (but-first my-choice-history))) [
-    set new-y (pool * pool-height)
+  let new-y (pool * pool-height) + (random-float (pool-height - 1))
+
+  set color item strategy strategy-colors
+
+  ifelse ticks = 0
+  [
+    pen-up
+    set new-x left-margin + 1
+    setxy new-x new-y
   ]
-  let dist distancexy new-x new-y
-  facexy new-x new-y
-  fd dist
+  [
+    pen-down
+    if (first my-choice-history) = (first (but-first my-choice-history)) [
+      set new-y ycor
+    ]
+    carefully [ setxy new-x new-y ] []
+  ]
 end
 
 to move-to-pool-1
@@ -431,7 +467,9 @@ to-report strategy-random
 end
 
 to-report strategy-slow-random [ period ]
-  ifelse ticks mod period = 0
+  if ticks = 0 [ set-data "phase" random period ]
+  let phase get-data "phase"
+  ifelse ticks mod period = phase
   [ report random-pool ]
   [ report pool ]
 end
@@ -704,10 +742,10 @@ to-report strategy-weighted-history [memory-size]
 end
 @#$#@#$#@
 GRAPHICS-WINDOW
-327
-10
-350
-259
+11
+559
+1624
+808
 -1
 -1
 15.0
@@ -721,7 +759,7 @@ GRAPHICS-WINDOW
 0
 1
 0
-0
+106
 0
 15
 0
@@ -812,10 +850,10 @@ NIL
 1
 
 PLOT
-530
-302
-767
-486
+524
+284
+761
+468
 Total Wealth
 Rounds
 Wealth
@@ -850,10 +888,10 @@ PENS
 "pen-2" 1.0 0 -2674135 true "" "plot get-for-pool recent-agent-history 2"
 
 MONITOR
-622
-520
-766
-593
+377
+478
+521
+551
 Total Wealth
 total-wealth
 1
@@ -879,10 +917,10 @@ PENS
 "default" 1.0 1 -16777216 true "" "histogram [wealth] of turtles"
 
 PLOT
-225
-302
-522
-487
+219
+284
+516
+469
 Wealth by group (per turtle)
 NIL
 NIL
@@ -892,12 +930,8 @@ NIL
 10.0
 true
 true
-"" ""
+"" ";; hacky to get this to be per-strategy instead of per-turtle.\nif ticks = 0 [\n  ask turtles [\n    create-temporary-plot-pen (word strategy)\n  ]\n]\nask turtles [\n  let s strategy\n  let s-turtles sort [who] of turtles with [strategy = s]\n  if first s-turtles = who [\n    set-current-plot-pen (word strategy)\n    set-plot-pen-color item strategy strategy-colors\n    plot wealth-per-turtle-with-strategy strategy\n  ]\n]"
 PENS
-"group 0" 1.0 0 -8431303 true "" "plot (sum [wealth] of turtles with [ strategy = 0 ]) / (count turtles with [strategy = 0])"
-"group 1" 1.0 0 -13840069 true "" "plot (sum [wealth] of turtles with [ strategy = 1 ]) / (count turtles with [strategy = 1])"
-"group 2" 1.0 0 -13791810 true "" "plot (sum [wealth] of turtles with [ strategy = 2 ]) / (count turtles with [strategy = 2])"
-"group 3" 1.0 0 -5825686 true "" "plot (sum [wealth] of turtles with [ strategy = 3 ]) / (count turtles with [strategy = 3])"
 
 BUTTON
 18
@@ -905,7 +939,7 @@ BUTTON
 203
 478
 Setup & Go 100 ticks
-setup\nrepeat 100 [ go ]\nshow map [i -> precision ((mean [wealth] of turtles with [strategy = i]) / ticks) 3 ] range 10
+setup\nrepeat 100 [ go ]\n\nlet strategies remove-duplicates [strategy] of turtles\nshow map [i -> list (item i strategies) precision ((mean [wealth] of turtles with [strategy = (item i strategies)]) / ticks) 3 ] range length strategies
 NIL
 1
 T
@@ -934,10 +968,10 @@ NIL
 1
 
 MONITOR
-459
-521
-603
-594
+214
+479
+358
+552
 Mean wealth
 mean [wealth] of turtles
 2
@@ -953,17 +987,17 @@ p
 p
 0
 1
-0.0
+0.5
 0.05
 1
 NIL
 HORIZONTAL
 
 PLOT
-809
-562
-1318
-817
+228
+20
+737
+275
 Individual agents wealth
 NIL
 NIL
@@ -973,7 +1007,7 @@ NIL
 10.0
 true
 false
-"ask turtles [\ncreate-temporary-plot-pen (word who)\n]" "ask turtles [\n    set-current-plot-pen (word who)\n    set-plot-pen-color ((strategy + 1) * 30 + 4)\n    plot wealth\n  ]"
+"ask turtles [\ncreate-temporary-plot-pen (word who)\n]" "ask turtles [\n    set-current-plot-pen (word who)\n    set-plot-pen-color item strategy strategy-colors\n    plot wealth\n  ]"
 PENS
 "default" 1.0 0 -16777216 true "" ""
 
