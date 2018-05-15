@@ -50,9 +50,10 @@ to setup
 
     ;; Set the agent's strategy!
 
-    ifelse (random-float 1) < p [ set strategy 4 ] [ set strategy 8 ]
+    ifelse (random-float 1) < p [ set strategy 0 ] [ set strategy 10 ]
 
-    ;;set strategy one-of range 10
+    ;;set strategy one-of range 11
+
 
     ;;set strategy who mod 2
     ;;set strategy 1
@@ -307,6 +308,7 @@ to pick-next-pool
   if strategy = 7 [ set pool adaptive-strategy-1 ]
   if strategy = 8 [ set pool adaptive-strategy-2 ]
   if strategy = 9 [ set pool strategy-turn-taker ]
+  if strategy = 10 [ set pool strategy-weighted-memory 4 ]
 
   ;;if strategy = 0 [ set pool strategy-sitting-duck 1 ]
   ;;if strategy = 1 [ set pool strategy-sitting-duck 2 ]
@@ -421,26 +423,11 @@ to-report matrix-dot-vector [AA vv]
 end
 
 to-report vector-add [uu vv]
-  ;; assume they are the same dimension
-  let xx []
-  foreach range length uu [ i ->
-    let uui item i uu
-    let vvi item i vv
-    set xx lput (uui + vvi) xx
-  ]
-  report xx
+  report (map [[u v] -> u + v] uu vv)
 end
 
-
 to-report vector-diff [uu vv]
-  ;; assume they are the same dimension
-  let xx []
-  foreach range length uu [ i ->
-    let uui item i uu
-    let vvi item i vv
-    set xx lput (uui - vvi) xx
-  ]
-  report xx
+  report (map [[u v] -> u - v] uu vv)
 end
 
 to-report vector-sumsquares [vv]
@@ -450,6 +437,19 @@ to-report vector-sumsquares [vv]
     set sumsquares sumsquares + (vvi * vvi)
   ]
   report sumsquares
+end
+
+to-report vector-scale [vv c]
+  let xx []
+  foreach range length vv [ i ->
+    let vvi item i vv
+    set xx lput (vvi * c) xx
+  ]
+  report xx
+end
+
+to-report vector-multiply-by-item [uu vv]
+  report (map [[u v] -> u * v] uu vv)
 end
 
 
@@ -520,6 +520,13 @@ end
 
 ;; HELPER FUNCTIONS
 
+;; normalize so the vector adds to 1
+to-report normalize-probability-vector [v]
+  let total sum v
+  let normalized-v map [ x -> x / total ] v
+  report normalized-v
+end
+
 ;; get S, matrix of probabilities for an agent to switch from pool i to pool j
 to-report get-switching-probabilities [var-name]
   let S []
@@ -540,7 +547,7 @@ to-report get-switching-probabilities [var-name]
     foreach [0 1 2] [ col-num ->
       let column item col-num S
       let total sum column
-      let normalized-column map [ x -> x / total ] column
+      let normalized-column normalize-probability-vector column
       set S replace-item col-num S normalized-column
     ]
 
@@ -737,9 +744,41 @@ end
 
 
 
-to-report strategy-weighted-history [memory-size]
-  report 0
+to-report strategy-weighted-memory [memory-size]
+  let weights []
+  ifelse ticks = 0 [
+    ;; initialize weights
+    set weights normalize-probability-vector (n-values memory-size [random-float 1])
+    set-data "weights" weights
+  ][
+    set weights get-data "weights"
+  ]
+
+  if ticks < memory-size [
+    report random-pool
+  ]
+
+  ;; get the recent rounds
+  let recent-history sublist agent-history 0 memory-size
+  let weighted-history (map vector-scale recent-history weights)
+  let agent-prediction reduce vector-add weighted-history
+
+
+  let payoff-prediction calculate-my-possible-payoffs agent-prediction
+  let max-payoff max payoff-prediction
+  report position max-payoff payoff-prediction
 end
+
+
+
+
+
+
+
+
+
+
+
 @#$#@#$#@
 GRAPHICS-WINDOW
 11
@@ -777,7 +816,7 @@ tau
 tau
 0
 1
-0.0
+1.0
 0.01
 1
 NIL
@@ -987,7 +1026,7 @@ p
 p
 0
 1
-0.5
+0.0
 0.05
 1
 NIL
@@ -1093,6 +1132,21 @@ false
 "" ""
 PENS
 "default" 1.0 0 -16777216 true "" "plot agent-variance"
+
+SLIDER
+1428
+44
+1600
+77
+mem-size
+mem-size
+0
+10
+0.0
+1
+1
+NIL
+HORIZONTAL
 
 @#$#@#$#@
 ## WHAT IS IT?
@@ -1473,7 +1527,7 @@ NetLogo 6.0.2
     </enumeratedValueSet>
     <steppedValueSet variable="p" first="0" step="0.05" last="1"/>
   </experiment>
-  <experiment name="vary tau, measure pool choices" repetitions="5" runMetricsEveryStep="true">
+  <experiment name="vary tau, measure pool choices" repetitions="8" runMetricsEveryStep="true">
     <setup>setup</setup>
     <go>go</go>
     <timeLimit steps="100"/>
@@ -1484,7 +1538,7 @@ NetLogo 6.0.2
     <enumeratedValueSet variable="N">
       <value value="50"/>
     </enumeratedValueSet>
-    <steppedValueSet variable="tau" first="0" step="0.05" last="1"/>
+    <steppedValueSet variable="tau" first="0" step="0.025" last="1"/>
     <enumeratedValueSet variable="p">
       <value value="1"/>
     </enumeratedValueSet>
@@ -1586,6 +1640,23 @@ NetLogo 6.0.2
     </enumeratedValueSet>
     <enumeratedValueSet variable="num-variants">
       <value value="1"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="vary tau, measure agent variance" repetitions="8" runMetricsEveryStep="true">
+    <setup>setup</setup>
+    <go>go</go>
+    <timeLimit steps="100"/>
+    <metric>total-wealth</metric>
+    <metric>get-for-pool recent-agent-history 0</metric>
+    <metric>get-for-pool recent-agent-history 1</metric>
+    <metric>get-for-pool recent-agent-history 2</metric>
+    <metric>agent-variance</metric>
+    <enumeratedValueSet variable="N">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <steppedValueSet variable="tau" first="0" step="0.025" last="1"/>
+    <enumeratedValueSet variable="p">
+      <value value="0"/>
     </enumeratedValueSet>
   </experiment>
 </experiments>
