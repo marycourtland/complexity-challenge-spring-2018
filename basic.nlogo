@@ -24,7 +24,7 @@ turtles-own [
   my-data
   my-data-names
 
-  strategy ;; nyi
+  strategy
 ]
 
 
@@ -50,8 +50,8 @@ to setup
 
     ;; Set the agent's strategy!
 
-    ifelse (random-float 1) < p [ set strategy 0 ] [ set strategy 10 ]
-
+    ifelse (random-float 1) > p [ set strategy strategy1 ] [ set strategy strategy2 ]
+    ;;set strategy 0
     ;;set strategy one-of range 11
 
 
@@ -246,6 +246,53 @@ to-report stable-choice-percent
   report (length filter [i -> i = 0] my-choice-history) / (length my-choice-history)
 end
 
+to-report total-pool-counts
+  report n-values 3 [ pool-num ->
+    length filter [ i -> i = pool-num ] my-choice-history
+  ]
+end
+
+;; Reports the matrix where the entry in column i and row j
+;; is the number of times the agent switched from pool i to pool j.
+;; (Same format as the switching-probabilities matrix)
+to-report switch-counts
+  let switches n-values 3 [ n-values 3 [ 0 ]]
+
+  let prev-pool last my-choice-history
+  foreach reverse but-last my-choice-history [ next-pool ->
+    let prev-pool-column (item prev-pool switches)
+    let counts item next-pool prev-pool-column
+    let col2 replace-item next-pool prev-pool-column (counts + 1)
+    set switches replace-item prev-pool switches col2
+    set prev-pool next-pool
+  ]
+
+  report switches
+end
+
+
+to-report flatten-2d-array [ array ]
+  let output []
+  foreach array [col ->
+    foreach col [ entry ->
+      set output lput entry output
+    ]
+  ]
+  report output
+end
+
+;; python friendly array output!
+to disp [array]
+  type "["
+  foreach array [ i ->
+    type i
+    type ", "
+  ]
+    print "]"
+end
+
+;;foreach [total-pool-counts] of turtles [ poolcounts -> foreach poolcounts [ i -> type i]  ]
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
 ;; POOLS
@@ -305,10 +352,10 @@ to pick-next-pool
   if strategy = 4 [ set pool strategy-slow-random 5 ]
   if strategy = 5 [ set pool strategy-check-last-round ]
   if strategy = 6 [ set pool strategy-favor-stable 5 10]
-  if strategy = 7 [ set pool adaptive-strategy-1 ]
-  if strategy = 8 [ set pool adaptive-strategy-2 ]
+  if strategy = 7 [ set pool strategy-switching-matrix-1 ]
+  if strategy = 8 [ set pool strategy-switching-matrix-2 ]
   if strategy = 9 [ set pool strategy-turn-taker ]
-  if strategy = 10 [ set pool strategy-weighted-memory 4 ]
+  if strategy = 10 [ set pool strategy-weighted-memory mem-size ]
 
   ;;if strategy = 0 [ set pool strategy-sitting-duck 1 ]
   ;;if strategy = 1 [ set pool strategy-sitting-duck 2 ]
@@ -325,16 +372,16 @@ to pick-next-pool
   ;;if strategy = 1 [ set pool strategy-random ]
 
 
-  ;;if strategy = 0 [ set pool adaptive-strategy-1 ]
-  ;;if strategy = 0 [ set pool adaptive-strategy-1-stochastic 0.2 ]
+  ;;if strategy = 0 [ set pool strategy-switching-matrix-1 ]
+  ;;if strategy = 0 [ set pool strategy-switching-matrix-1-stochastic 0.2 ]
   ;;if strategy = 1 [ set pool strategy-favor-stable 5 10 ]
 
-  ;;if strategy = 0 [ set pool adaptive-strategy-1 ]
-  ;;if strategy = 1 [ set pool adaptive-strategy-2 ]
+  ;;if strategy = 0 [ set pool strategy-switching-matrix-1 ]
+  ;;if strategy = 1 [ set pool strategy-switching-matrix-2 ]
 
   ;;if strategy = 0 [ set pool strategy-turn-taker ]
   ;;if strategy = 0 [ set pool strategy-favor-stable 5 10 ]
-  ;;if strategy = 1 [ set pool adaptive-strategy-2 ]
+  ;;if strategy = 1 [ set pool strategy-switching-matrix-2 ]
 
   set my-choice-history (record my-choice-history pool)
 end
@@ -614,7 +661,7 @@ to-report predictive-strategy-1
 end
 
 ;; Same as predictive-strategy-1 but keeps a bunch of options in its back pocket.
-to-report adaptive-strategy-1
+to-report strategy-switching-matrix-1
   ;;let num-variants 10
   let S-variants []
 
@@ -686,22 +733,22 @@ to-report adaptive-strategy-1
 end
 
 ;; Same as predictive-strategy-1 but with some stochasticity.
-to-report adaptive-strategy-1-stochastic [random-probability]
-  if ticks <= 2 [ report adaptive-strategy-1 ]
+to-report strategy-switching-matrix-1-stochastic [random-probability]
+  if ticks <= 2 [ report strategy-switching-matrix-1 ]
 
   ifelse (random-float 1) < random-probability [
     report random-pool
   ] [
-    report adaptive-strategy-1
+    report strategy-switching-matrix-1
   ]
 end
 
 
 ;; Same as predictive-strategy-1 but does some genetic variance of the strategies in its list
-to-report adaptive-strategy-2
-  if ticks < 2 [ report adaptive-strategy-1 ] ;; don't start varying S choices until tick 2
+to-report strategy-switching-matrix-2
+  if ticks < 2 [ report strategy-switching-matrix-1 ] ;; don't start varying S choices until tick 2
 
-  let choice adaptive-strategy-1
+  let choice strategy-switching-matrix-1
 
   ;; replace some S choices with variants of my latest used S
   let num-replacements floor num-variants * percent-to-replace
@@ -777,8 +824,6 @@ end
 
 
 
-
-
 @#$#@#$#@
 GRAPHICS-WINDOW
 11
@@ -816,7 +861,7 @@ tau
 tau
 0
 1
-1.0
+0.63
 0.01
 1
 NIL
@@ -1051,10 +1096,10 @@ PENS
 "default" 1.0 0 -16777216 true "" ""
 
 SLIDER
-16
-207
-188
-240
+1380
+71
+1552
+104
 num-variants
 num-variants
 0
@@ -1086,10 +1131,10 @@ PENS
 "pen-2" 1.0 0 -2674135 true "" "plot item 2 (first payoff-history)"
 
 SLIDER
-15
-252
-190
-285
+1379
+116
+1554
+149
 percent-to-replace
 percent-to-replace
 0
@@ -1101,15 +1146,15 @@ NIL
 HORIZONTAL
 
 SLIDER
-15
-298
-192
-331
+1379
+162
+1556
+195
 mutation-magnitude
 mutation-magnitude
 0
 0.5
-1.0
+0.0
 0.05
 1
 NIL
@@ -1134,19 +1179,59 @@ PENS
 "default" 1.0 0 -16777216 true "" "plot agent-variance"
 
 SLIDER
-1428
-44
-1600
-77
+1379
+270
+1551
+303
 mem-size
 mem-size
 0
 10
-0.0
+6.0
 1
 1
 NIL
 HORIZONTAL
+
+CHOOSER
+12
+176
+104
+221
+strategy1
+strategy1
+0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
+0
+
+CHOOSER
+111
+176
+203
+221
+strategy2
+strategy2
+0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
+0
+
+TEXTBOX
+1381
+40
+1621
+85
+Params for SwitchingMatrix strategies\n
+12
+0.0
+1
+
+TEXTBOX
+1381
+234
+1632
+279
+Params for WeightedMemory strategies
+12
+0.0
+1
 
 @#$#@#$#@
 ## WHAT IS IT?
@@ -1657,6 +1742,60 @@ NetLogo 6.0.2
     <steppedValueSet variable="tau" first="0" step="0.025" last="1"/>
     <enumeratedValueSet variable="p">
       <value value="0"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="Pool counts of each turtle" repetitions="1" runMetricsEveryStep="false">
+    <setup>setup</setup>
+    <go>go</go>
+    <timeLimit steps="100"/>
+    <metric>[list strategy total-pool-counts] of turtles</metric>
+    <enumeratedValueSet variable="percent-to-replace">
+      <value value="1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="N">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="mutation-magnitude">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="tau">
+      <value value="0.63"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="mem-size">
+      <value value="6"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="p">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="num-variants">
+      <value value="1"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="Switch counts of each turtle" repetitions="1" runMetricsEveryStep="false">
+    <setup>setup</setup>
+    <go>go</go>
+    <timeLimit steps="100"/>
+    <metric>[list strategy (flatten-2d-array switch-counts) ] of turtles</metric>
+    <enumeratedValueSet variable="percent-to-replace">
+      <value value="1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="N">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="mutation-magnitude">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="tau">
+      <value value="0.63"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="mem-size">
+      <value value="6"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="p">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="num-variants">
+      <value value="1"/>
     </enumeratedValueSet>
   </experiment>
 </experiments>
