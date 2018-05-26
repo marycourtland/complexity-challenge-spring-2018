@@ -13,7 +13,6 @@ globals [
   agent-history
   payoff-history ;; PER AGENT
 
-  ;; misc
 ]
 
 turtles-own [
@@ -49,17 +48,21 @@ to setup
     set my-data-names []
 
     ;; Set the agent's strategy!
+    ;;ifelse (random-float 1) > p [ set strategy strategy1 ] [ set strategy strategy2 ]
 
-    ifelse (random-float 1) > p [ set strategy strategy1 ] [ set strategy strategy2 ]
-    ;;set strategy 0
-    ;;set strategy one-of range 11
-
-
-    ;;set strategy who mod 2
-    ;;set strategy 1
+    set strategy 0 ;; UNUSED
+    init-random-parameters
   ]
 
   reset-ticks
+end
+
+;; for strategy-parameterized
+to init-random-parameters
+  let component-weights random-normalized-vector 4
+  let bias-weights random-normalized-vector 3
+  set-data "component-weights" component-weights
+  set-data "bias-weights" bias-weights
 end
 
 to go
@@ -240,6 +243,18 @@ to-report agent-choices-mutual-information [agent1 agent2]
   report mutual-information choices1 choices2 [0 1 2]
 end
 
+to-report gini-index [wealths]
+  let sorted-wealths sort wealths
+  let nn length wealths
+
+  let numerator 0
+  foreach range nn [ i ->
+    set numerator numerator + (2 * (i + 1) - nn - 1) * (item i sorted-wealths)
+  ]
+  let denominator (mean wealths) * nn * nn
+  report numerator / denominator
+end
+
 ;; Individual turtle measures
 
 to-report stable-choice-percent
@@ -357,31 +372,17 @@ to pick-next-pool
   if strategy = 9 [ set pool strategy-turn-taker ]
   if strategy = 10 [ set pool strategy-weighted-memory mem-size ]
 
-  ;;if strategy = 0 [ set pool strategy-sitting-duck 1 ]
-  ;;if strategy = 1 [ set pool strategy-sitting-duck 2 ]
+  ;;set pool strategy-parameterized 0 0.1 0.6 0.3 0 0
+  ;;if ticks = 0 [
+  ;;  set-data "my-bias-pool" one-of [0 1 2]
+  ;;]
+  ;;let biases replace-item (get-data "my-bias-pool") [0 0 0] 1
+  ;;let the-x (1 - the-b - the-r - the-h)
+  ;;set pool strategy-parameterized the-b the-x the-r the-h (item 0 biases) (item 1 biases) (item 2 biases)
 
-  ;;if strategy = 0 [ set pool strategy-sitting-duck 1 ]
-  ;;if strategy = 1 [ set pool strategy-random ]
-  ;;if strategy = 2 [ set pool strategy-random ]
-  ;;if strategy = 3 [ set pool strategy-check-last-round ]
-
-  ;;if strategy = 0 [ set pool strategy-favor-stable 5 10]
-  ;;if strategy = 1 [ set pool strategy-random ]
-
-  ;;if strategy = 0 [ set pool strategy-favor-stable 2 7 ]
-  ;;if strategy = 1 [ set pool strategy-random ]
-
-
-  ;;if strategy = 0 [ set pool strategy-switching-matrix-1 ]
-  ;;if strategy = 0 [ set pool strategy-switching-matrix-1-stochastic 0.2 ]
-  ;;if strategy = 1 [ set pool strategy-favor-stable 5 10 ]
-
-  ;;if strategy = 0 [ set pool strategy-switching-matrix-1 ]
-  ;;if strategy = 1 [ set pool strategy-switching-matrix-2 ]
-
-  ;;if strategy = 0 [ set pool strategy-turn-taker ]
-  ;;if strategy = 0 [ set pool strategy-favor-stable 5 10 ]
-  ;;if strategy = 1 [ set pool strategy-switching-matrix-2 ]
+  let weights get-data "component-weights"
+  let biases get-data "bias-weights"
+  set pool strategy-parameterized (item 0 weights) (item 1 weights) (item 2 weights) (item 3 weights) (item 0 biases) (item 1 biases) (item 2 biases)
 
   set my-choice-history (record my-choice-history pool)
 end
@@ -500,6 +501,22 @@ to-report vector-multiply-by-item [uu vv]
 end
 
 
+;; reports in index in the weights list
+to-report weighted-choice [ weights ]
+  if sum weights = 0 [ report one-of range length weights ]
+
+  let ww normalize-probability-vector weights
+  let pp random-float 1
+
+  let cumulative 0
+  foreach range (length weights - 1) [ i ->
+    set cumulative cumulative + (item i weights)
+    if pp < cumulative [ report i ]
+  ]
+  report (length weights - 1)
+end
+
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
 ;; Naive agents
@@ -511,6 +528,10 @@ end
 
 to-report strategy-random
   report random-pool
+end
+
+to-report strategy-weighted-random [ weight0 weight1 weight2 ]
+  report weighted-choice (list weight0 weight1 weight2)
 end
 
 to-report strategy-slow-random [ period ]
@@ -528,6 +549,17 @@ to-report strategy-check-last-round
   let previous-counts first agent-history
   let min-pool position (min previous-counts) previous-counts
   report min-pool
+end
+
+to-report strategy-check-last-t-rounds [ t ]
+  ;; pick the pool with the lowest total population summed over the last t rounds
+  ;; note: if there's a tie, it will choose the lower risk round. (What if that was random?)
+  if ticks = 0 [ report random-pool ]
+
+  set t min list t length agent-history
+
+  let total-populations reduce vector-add sublist agent-history 0 t
+  report position (min total-populations) total-populations
 end
 
 to-report strategy-favor-stable [rest-min rest-max]
@@ -572,6 +604,18 @@ to-report normalize-probability-vector [v]
   let total sum v
   let normalized-v map [ x -> x / total ] v
   report normalized-v
+end
+
+to-report random-normalized-vector [ dim ]
+  let partitions sort n-values (dim - 1) [ random-float 1 ]
+  set partitions lput 1 partitions
+  let v []
+  let prev 0
+  foreach partitions [ i ->
+    set v lput (i - prev) v
+    set prev i
+  ]
+  report v
 end
 
 ;; get S, matrix of probabilities for an agent to switch from pool i to pool j
@@ -790,7 +834,6 @@ to-report strategy-turn-taker
 end
 
 
-
 to-report strategy-weighted-memory [memory-size]
   let weights []
   ifelse ticks = 0 [
@@ -816,9 +859,54 @@ to-report strategy-weighted-memory [memory-size]
   report position max-payoff payoff-prediction
 end
 
+to-report strategy-a
+  report 0
+end
 
+to-report strategy-risk-reduction
+  if ticks = 0 [ report 0 ]
 
+  let my-current-wealth wealth
+  let all-wealths [wealth] of turtles
+  let percentile-50 median all-wealths
 
+  let higher-wealths [wealth] of turtles with [wealth > percentile-50]
+
+  let percentile-75 percentile-50
+  if length higher-wealths > 0 [
+    set percentile-75 median higher-wealths
+  ]
+
+  ;; The risk I am willing to take is dependent on how my wealth compares to others.
+  if my-current-wealth < percentile-50 [ report 0 ]
+  if my-current-wealth < percentile-75 [ report 1 ]
+  report 2;
+end
+
+;;;;;;;;;;;
+
+;; A strategy with a lot of parameters!
+;; b + x + r + h should be normalized to 1.
+;; b: the portion of the decision given to a biased choice (favoring one pool over another)
+;; x: the portion of the decision given to a random choice
+;; r: the portion of the decision based on considering past rewards
+;; h: the portion of the decision based on considering past history (populations of agents)
+;; b0, b1, b2: if we decided purely based on bias, then these are the weights given to each pool (sum to 1)
+to-report strategy-parameterized [b x r h b0 b1 b2 ]
+  ;; Decide on a pool choice for each component
+  let poolB strategy-weighted-random b0 b1 b2
+  let poolX strategy-random
+  let poolR strategy-risk-reduction
+  let poolH strategy-check-last-t-rounds 20
+  let choices (list poolB poolX poolR poolH)
+
+  ;; normalize all the probabilities
+  let ww normalize-probability-vector (list b x r h)
+
+  ;; choose a pool!
+  let choice-index weighted-choice ww
+  report item choice-index choices
+end
 
 
 
@@ -861,7 +949,7 @@ tau
 tau
 0
 1
-0.63
+0.82
 0.01
 1
 NIL
@@ -1232,6 +1320,73 @@ Params for WeightedMemory strategies
 12
 0.0
 1
+
+SLIDER
+1388
+355
+1560
+388
+the-b
+the-b
+0
+1
+0.0
+0.1
+1
+NIL
+HORIZONTAL
+
+SLIDER
+1387
+395
+1559
+428
+the-r
+the-r
+0
+1
+1.0
+0.1
+1
+NIL
+HORIZONTAL
+
+SLIDER
+1387
+434
+1559
+467
+the-h
+the-h
+0
+1
+0.0
+0.1
+1
+NIL
+HORIZONTAL
+
+MONITOR
+1388
+482
+1445
+527
+the-x
+1 - the-h - the-b - the-r
+17
+1
+11
+
+MONITOR
+579
+474
+756
+547
+gini index
+gini-index [wealth] of turtles
+3
+1
+18
 
 @#$#@#$#@
 ## WHAT IS IT?
