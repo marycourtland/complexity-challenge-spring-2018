@@ -227,39 +227,45 @@ to-report mutate-population [ param-population ]
 
   ;; We will apply the same adjustment to each member in the population.
   let index-to-adjust one-of range 4 ;; just one of the first four entries
-  let adjustment random-normal 0 mutation-magnitude
+  let adjustment 1 + random-normal 0 mutation-magnitude
 
   foreach param-population [ params ->
+    ;; only some of the turtles will mutate
+    ifelse ((random-float 1) < mutation-probability) [
 
-    ;; We will pick the entry that is going to be adjusted,
-    ;; then calculate the adjusted value
-    let value-to-adjust item index-to-adjust params
-    let adjusted-value (value-to-adjust + adjustment)
-    set adjusted-value min list 1 adjusted-value
-    set adjusted-value max list 0 adjusted-value
+      ;; We will pick the entry that is going to be adjusted,
+      ;; then calculate the adjusted value
+      let value-to-adjust item index-to-adjust params
+      let adjusted-value (value-to-adjust * adjustment)
+      set adjusted-value min list 1 adjusted-value
+      set adjusted-value max list 0 adjusted-value
 
-    ;; The rest of the entries are going to be 'squeezed' or 'expanded' to fit.
-    let mutated []
-    ifelse (value-to-adjust != 1) [
-      let remainder-before 1 - value-to-adjust
-      let remainder-after 1 - adjusted-value
-      let scale remainder-after / remainder-before
+      ;; The rest of the entries are going to be 'squeezed' or 'expanded' to fit.
+      let mutated []
+      ifelse (value-to-adjust != 1) [
+        let remainder-before 1 - value-to-adjust
+        let remainder-after 1 - adjusted-value
+        let scale remainder-after / remainder-before
 
-      set mutated n-values length params [ i ->
-        ifelse-value (i = index-to-adjust) [ adjusted-value ] [ (item i params) * scale ]
+        set mutated n-values length params [ i ->
+          ifelse-value (i = index-to-adjust) [ adjusted-value ] [ (item i params) * scale ]
+        ]
+      ][
+        ;; This block will handle the edge case where value-to-adjust was 100% of the choice.
+        ;; (The other probabilities were all 0, so give them an equal share.)
+        let remainder-after 1 - adjusted-value
+        let remainder-apportioned (remainder-after / (4 - 1))
+
+        set mutated n-values length params [ i ->
+          ifelse-value (i = index-to-adjust) [ adjusted-value ] [ remainder-apportioned ]
+        ]
       ]
-    ][
-      ;; This block will handle the edge case where value-to-adjust was 100% of the choice.
-      ;; (The other probabilities were all 0, so give them an equal share.)
-      let remainder-after 1 - adjusted-value
-      let remainder-apportioned (remainder-after / (4 - 1))
 
-      set mutated n-values length params [ i ->
-        ifelse-value (i = index-to-adjust) [ adjusted-value ] [ remainder-apportioned ]
-      ]
+      set mutated-population lput mutated mutated-population
+    ] [
+      ;; this params isn't going to mutate.
+      set mutated-population lput params mutated-population
     ]
-
-    set mutated-population lput mutated mutated-population
   ]
 
   report mutated-population
@@ -1070,7 +1076,6 @@ to-report strategy-parameterized [component-weights bias-weights]
   let choice-index weighted-choice ww
   report item choice-index choices
 end
-
 @#$#@#$#@
 GRAPHICS-WINDOW
 11
@@ -1093,8 +1098,8 @@ GRAPHICS-WINDOW
 106
 0
 15
-0
-0
+1
+1
 1
 ticks
 30.0
@@ -1401,7 +1406,7 @@ mutation-magnitude
 mutation-magnitude
 0
 0.5
-0.2
+0.1
 0.05
 1
 NIL
@@ -1556,7 +1561,7 @@ num-param-pop-mutations
 num-param-pop-mutations
 1
 10
-3.0
+5.0
 1
 1
 NIL
@@ -1581,7 +1586,7 @@ mutation-probability
 mutation-probability
 0
 1
-0.0
+0.7
 0.05
 1
 NIL
@@ -1623,7 +1628,7 @@ BUTTON
 114
 520
 CLEAR ALL
-clear-output\nclear-all\n
+clear-output\nclear-all\nrandom-seed 2345
 NIL
 1
 T
@@ -1657,7 +1662,7 @@ INPUTBOX
 200
 551
 Ng
-2.0
+40.0
 1
 0
 Number
@@ -2004,7 +2009,7 @@ false
 Polygon -7500403 true true 270 75 225 30 30 225 75 270
 Polygon -7500403 true true 30 75 75 30 270 225 225 270
 @#$#@#$#@
-NetLogo 6.0.3
+NetLogo 6.0.2
 @#$#@#$#@
 @#$#@#$#@
 @#$#@#$#@
@@ -2225,6 +2230,68 @@ NetLogo 6.0.3
     </enumeratedValueSet>
     <enumeratedValueSet variable="num-variants">
       <value value="1"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="GA" repetitions="1" runMetricsEveryStep="false">
+    <setup>clear-all
+random-seed 2345</setup>
+    <go>repeat Ng * num-param-pop-mutations [
+  setup
+  repeat 100 [ go ]
+  finish-game
+]</go>
+    <timeLimit steps="1"/>
+    <metric>mutation-history</metric>
+    <enumeratedValueSet variable="contraction-magnitude">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="the-b">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="mutation-probability">
+      <value value="0.7"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="Ng">
+      <value value="40"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="p">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="contraction-probability">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="percent-to-replace">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="the-r">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="N">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="strategy1">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="mutation-magnitude">
+      <value value="0.1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="tau">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="num-param-pop-mutations">
+      <value value="5"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="mem-size">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="strategy2">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="num-variants">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="the-h">
+      <value value="0"/>
     </enumeratedValueSet>
   </experiment>
 </experiments>
