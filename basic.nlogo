@@ -13,6 +13,16 @@ globals [
   agent-history
   payoff-history ;; PER AGENT
 
+
+  ;; GA variables
+  param-population-mutations
+  current-mutation
+  mutation-history ;; list of [fitness, generation, mutation]. MOST RECENT AT END
+  generation-count
+
+
+  temp-pop
+
 ]
 
 turtles-own [
@@ -22,13 +32,30 @@ turtles-own [
   my-cost-history
   my-data
   my-data-names
-
   strategy
 ]
 
 
 to setup
+
+  ;; persist these globals across multiple runs
+  let saved-param-population-mutations param-population-mutations
+  let saved-current-mutation current-mutation
+  let saved-mutation-history mutation-history
+  let saved-generation-count generation-count
   clear-all
+  set param-population-mutations saved-param-population-mutations
+  set current-mutation saved-current-mutation
+  set mutation-history saved-mutation-history
+  set generation-count saved-generation-count
+
+  iterate-parameter-population
+  let current-param-population (item current-mutation param-population-mutations)
+
+  type "Running mutation "
+  print current-mutation
+  show nested-precision (current-param-population) 2
+
   set num-strategies 16
 
   set agent-history []
@@ -49,20 +76,14 @@ to setup
 
     ;; Set the agent's strategy!
     ;;ifelse (random-float 1) > p [ set strategy strategy1 ] [ set strategy strategy2 ]
-
     set strategy 0 ;; UNUSED
-    init-random-parameters
+
+    ;; assign one of the params from the population to this agent
+    set-data "params" item who current-param-population
+    set-data "biases" random-normalized-vector 3
   ]
 
   reset-ticks
-end
-
-;; for strategy-parameterized
-to init-random-parameters
-  let component-weights random-normalized-vector 4
-  let bias-weights random-normalized-vector 3
-  set-data "component-weights" component-weights
-  set-data "bias-weights" bias-weights
 end
 
 to go
@@ -89,6 +110,12 @@ to go
   ]
 
   tick
+end
+
+to finish-game
+  type "Fitness: "
+  print round(get-current-fitness)
+  record-mutation-fitness
 end
 
 to display-world
@@ -123,6 +150,135 @@ to display-payoff-on-patches
       let pool-patches patches with [pxcor = (left-margin + 1 + ticks * x-step-size) and (pycor >= (pool-num * pool-height) and pycor < ((pool-num + 1) * pool-height))]
       ask pool-patches [ set pcolor (item pool-num pool-colors) ]
     ]
+  ]
+end
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; PARAMETER POPULATIONS (genetic algorithm)
+;;
+
+to iterate-parameter-population
+  ifelse not is-list? param-population-mutations or length param-population-mutations != num-param-pop-mutations [
+    ;; At the start: the populations have not been initialized yet
+    ;; 1. Spawn a random set of populations
+    print "** Spawning Initial Populations **"
+    set param-population-mutations n-values num-param-pop-mutations [ spawn-population ]
+    set mutation-history []
+    set generation-count 0
+
+    ;; 2. We'll start by evaluating the first one
+    set current-mutation 0
+  ] [
+    ;; Between runs: we try out each mutation
+
+    ;; 1. Try the next mutation
+    set current-mutation current-mutation + 1
+
+    ;; Check if it's time to mutate.
+    if current-mutation = num-param-pop-mutations [
+      ;; Apply a mutation!
+      set generation-count generation-count + 1
+
+      let hlength length mutation-history
+      let last-mutations sublist mutation-history (hlength - num-param-pop-mutations) hlength
+
+      ;; choose the best to mutate
+      ;; NOTE: the result of the reduce will be in the form of [fitness, mutation]
+
+      let best-mutation reduce [[best-so-far next] ->
+        ifelse-value ((first best-so-far) > (first next)) [ best-so-far ] [ next ]
+      ] last-mutations
+
+      print "**"
+      type "The best mutation had fitness "
+      print round first best-mutation
+      print nested-precision (last best-mutation) 2
+      print "Mutating it!"
+      print "**"
+      type "Generation "
+      print generation-count
+      print "**"
+
+      ;; spawn copies of the best...
+      set param-population-mutations n-values num-param-pop-mutations [ last best-mutation ]
+
+      ;; ...and then mutate all of them
+      set param-population-mutations (map mutate-population param-population-mutations)
+
+      ;; After mutating, we will start over by evaluating the first mutation
+      set current-mutation 0
+    ]
+  ]
+end
+
+to-report spawn-population
+  report n-values N [ choose-random-parameters ]
+end
+
+;; random parameters, for strategy-parameterized, for a single agent
+to-report choose-random-parameters
+  report random-normalized-vector 4
+end
+
+to-report mutate-population [ param-population ]
+  let mutated-population []
+
+  ;; We will apply the same adjustment to each member in the population.
+  let index-to-adjust one-of range 4 ;; just one of the first four entries
+  let adjustment random-normal 0 mutation-magnitude
+
+  foreach param-population [ params ->
+
+    ;; We will pick the entry that is going to be adjusted,
+    ;; then calculate the adjusted value
+    let value-to-adjust item index-to-adjust params
+    let adjusted-value (value-to-adjust + adjustment)
+    set adjusted-value min list 1 adjusted-value
+    set adjusted-value max list 0 adjusted-value
+
+    ;; The rest of the entries are going to be 'squeezed' or 'expanded' to fit.
+    let mutated []
+    ifelse (value-to-adjust != 1) [
+      let remainder-before 1 - value-to-adjust
+      let remainder-after 1 - adjusted-value
+      let scale remainder-after / remainder-before
+
+      set mutated n-values length params [ i ->
+        ifelse-value (i = index-to-adjust) [ adjusted-value ] [ (item i params) * scale ]
+      ]
+    ][
+      ;; This block will handle the edge case where value-to-adjust was 100% of the choice.
+      ;; (The other probabilities were all 0, so give them an equal share.)
+      let remainder-after 1 - adjusted-value
+      let remainder-apportioned (remainder-after / (4 - 1))
+
+      set mutated n-values length params [ i ->
+        ifelse-value (i = index-to-adjust) [ adjusted-value ] [ remainder-apportioned ]
+      ]
+    ]
+
+    set mutated-population lput mutated mutated-population
+  ]
+
+  report mutated-population
+end
+
+to record-mutation-fitness
+  if is-list? param-population-mutations [
+    let current-param-population (item current-mutation param-population-mutations)
+    set mutation-history lput (list get-current-fitness generation-count current-param-population) mutation-history
+  ]
+end
+
+to-report get-current-fitness
+  report total-wealth * (1 - gini-index [wealth] of turtles)
+end
+
+to display-mutation-history
+  foreach mutation-history [ mh ->
+    type first mh
   ]
 end
 
@@ -180,6 +336,10 @@ to plot-agents-wealth
     set-current-plot-pen (word who)
     plot wealth
   ]
+end
+
+to-report nested-precision [ array2d decimal-places ]
+  report map [i -> map [j -> precision j decimal-places ] i] array2d
 end
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -380,9 +540,7 @@ to pick-next-pool
   ;;let the-x (1 - the-b - the-r - the-h)
   ;;set pool strategy-parameterized the-b the-x the-r the-h (item 0 biases) (item 1 biases) (item 2 biases)
 
-  let weights get-data "component-weights"
-  let biases get-data "bias-weights"
-  set pool strategy-parameterized (item 0 weights) (item 1 weights) (item 2 weights) (item 3 weights) (item 0 biases) (item 1 biases) (item 2 biases)
+  set pool strategy-parameterized (get-data "params") (get-data "biases")
 
   set my-choice-history (record my-choice-history pool)
 end
@@ -602,6 +760,7 @@ end
 ;; normalize so the vector adds to 1
 to-report normalize-probability-vector [v]
   let total sum v
+  if (total = 1) [ report v ] ;; save some computation time
   let normalized-v map [ x -> x / total ] v
   report normalized-v
 end
@@ -892,25 +1051,25 @@ end
 ;; r: the portion of the decision based on considering past rewards
 ;; h: the portion of the decision based on considering past history (populations of agents)
 ;; b0, b1, b2: if we decided purely based on bias, then these are the weights given to each pool (sum to 1)
-to-report strategy-parameterized [b x r h b0 b1 b2 ]
+;;
+;; component weights is: [b x r h]
+;; bias weights is [b0 b1 b2]
+to-report strategy-parameterized [component-weights bias-weights]
   ;; Decide on a pool choice for each component
-  let poolB strategy-weighted-random b0 b1 b2
+  let poolB strategy-weighted-random (item 0 bias-weights) (item 1 bias-weights) (item 2 bias-weights)
   let poolX strategy-random
   let poolR strategy-risk-reduction
   let poolH strategy-check-last-t-rounds 20
+
   let choices (list poolB poolX poolR poolH)
 
   ;; normalize all the probabilities
-  let ww normalize-probability-vector (list b x r h)
+  let ww normalize-probability-vector component-weights
 
   ;; choose a pool!
   let choice-index weighted-choice ww
   report item choice-index choices
 end
-
-
-
-
 
 @#$#@#$#@
 GRAPHICS-WINDOW
@@ -949,7 +1108,7 @@ tau
 tau
 0
 1
-0.82
+0.0
 0.01
 1
 NIL
@@ -962,7 +1121,7 @@ SLIDER
 107
 N
 N
-0
+1
 100
 50.0
 5
@@ -971,10 +1130,10 @@ NIL
 HORIZONTAL
 
 BUTTON
-16
-350
-90
-383
+13
+253
+87
+286
 Setup
 setup
 NIL
@@ -988,10 +1147,10 @@ NIL
 1
 
 BUTTON
-16
-397
-89
-430
+13
+300
+86
+333
 Go
 go
 T
@@ -1005,10 +1164,10 @@ NIL
 1
 
 BUTTON
-106
-396
-203
-429
+103
+299
+200
+332
 Go 1 Tick
 go
 NIL
@@ -1106,12 +1265,12 @@ true
 PENS
 
 BUTTON
-18
-445
-203
-478
+15
+348
+200
+381
 Setup & Go 100 ticks
-setup\nrepeat 100 [ go ]\n\nlet strategies remove-duplicates [strategy] of turtles\nshow map [i -> list (item i strategies) precision ((mean [wealth] of turtles with [strategy = (item i strategies)]) / ticks) 3 ] range length strategies
+setup\nrepeat 100 [ go ]\nfinish-game\n\n;;let strategies remove-duplicates [strategy] of turtles\n;;show map [i -> list (item i strategies) precision ((mean [wealth] of turtles with [strategy = (item i strategies)]) / ticks) 3 ] range length strategies
 NIL
 1
 T
@@ -1123,10 +1282,10 @@ NIL
 1
 
 BUTTON
-131
-350
-201
-383
+128
+253
+198
+286
 reset
 set tau 0.5\nset N 50
 NIL
@@ -1184,15 +1343,15 @@ PENS
 "default" 1.0 0 -16777216 true "" ""
 
 SLIDER
-1380
-71
-1552
-104
+1388
+47
+1560
+80
 num-variants
 num-variants
 0
 20
-1.0
+0.0
 1
 1
 NIL
@@ -1219,30 +1378,30 @@ PENS
 "pen-2" 1.0 0 -2674135 true "" "plot item 2 (first payoff-history)"
 
 SLIDER
-1379
-116
-1554
-149
+1396
+59
+1571
+92
 percent-to-replace
 percent-to-replace
 0
 1
-1.0
+0.0
 0.1
 1
 NIL
 HORIZONTAL
 
 SLIDER
-1379
-162
-1556
-195
+1381
+369
+1585
+402
 mutation-magnitude
 mutation-magnitude
 0
 0.5
-0.0
+0.2
 0.05
 1
 NIL
@@ -1267,15 +1426,15 @@ PENS
 "default" 1.0 0 -16777216 true "" "plot agent-variance"
 
 SLIDER
-1379
-270
-1551
-303
+1386
+126
+1558
+159
 mem-size
 mem-size
 0
 10
-6.0
+0.0
 1
 1
 NIL
@@ -1312,20 +1471,20 @@ Params for SwitchingMatrix strategies\n
 1
 
 TEXTBOX
-1381
-234
-1632
-279
+1379
+116
+1630
+161
 Params for WeightedMemory strategies
 12
 0.0
 1
 
 SLIDER
-1388
-355
-1560
-388
+1383
+185
+1555
+218
 the-b
 the-b
 0
@@ -1337,25 +1496,25 @@ NIL
 HORIZONTAL
 
 SLIDER
-1387
-395
-1559
-428
+1391
+199
+1563
+232
 the-r
 the-r
 0
 1
-1.0
+0.0
 0.1
 1
 NIL
 HORIZONTAL
 
 SLIDER
-1387
-434
-1559
-467
+1402
+209
+1574
+242
 the-h
 the-h
 0
@@ -1367,10 +1526,10 @@ NIL
 HORIZONTAL
 
 MONITOR
-1388
-482
-1445
-527
+1415
+219
+1472
+264
 the-x
 1 - the-h - the-b - the-r
 17
@@ -1387,6 +1546,121 @@ gini-index [wealth] of turtles
 3
 1
 18
+
+SLIDER
+1381
+323
+1629
+356
+num-param-pop-mutations
+num-param-pop-mutations
+1
+10
+3.0
+1
+1
+NIL
+HORIZONTAL
+
+TEXTBOX
+1385
+287
+1535
+317
+Population GA parameters
+12
+0.0
+1
+
+SLIDER
+1383
+408
+1584
+441
+mutation-probability
+mutation-probability
+0
+1
+0.0
+0.05
+1
+NIL
+HORIZONTAL
+
+SLIDER
+1377
+452
+1598
+485
+contraction-magnitude
+contraction-magnitude
+0
+1
+0.0
+0.05
+1
+NIL
+HORIZONTAL
+
+SLIDER
+1376
+489
+1595
+522
+contraction-probability
+contraction-probability
+0
+1
+0.0
+0.1
+1
+NIL
+HORIZONTAL
+
+BUTTON
+16
+487
+114
+520
+CLEAR ALL
+clear-output\nclear-all\n
+NIL
+1
+T
+OBSERVER
+NIL
+NIL
+NIL
+NIL
+1
+
+BUTTON
+18
+447
+173
+480
+Run Ng Generations
+repeat Ng * num-param-pop-mutations [\n  setup\n  repeat 100 [ go ]\n  finish-game\n]
+NIL
+1
+T
+OBSERVER
+NIL
+NIL
+NIL
+NIL
+1
+
+INPUTBOX
+131
+491
+200
+551
+Ng
+2.0
+1
+0
+Number
 
 @#$#@#$#@
 ## WHAT IS IT?
@@ -1730,7 +2004,7 @@ false
 Polygon -7500403 true true 270 75 225 30 30 225 75 270
 Polygon -7500403 true true 30 75 75 30 270 225 225 270
 @#$#@#$#@
-NetLogo 6.0.2
+NetLogo 6.0.3
 @#$#@#$#@
 @#$#@#$#@
 @#$#@#$#@
