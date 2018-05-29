@@ -49,12 +49,15 @@ to setup
   set mutation-history saved-mutation-history
   set generation-count saved-generation-count
 
-  iterate-parameter-population
-  let current-param-population (item current-mutation param-population-mutations)
+  let current-param-population []
+  if use-meta-ga? [
+    iterate-parameter-population
+    set current-param-population (item current-mutation param-population-mutations)
 
-  type "Running mutation "
-  print current-mutation
-  show nested-precision (current-param-population) 2
+    type "Running mutation "
+    print current-mutation
+    show nested-precision (current-param-population) 2
+  ]
 
   set num-strategies 16
 
@@ -63,7 +66,7 @@ to setup
 
   display-world
 
-  set-default-shape turtles "bug"
+  set-default-shape turtles "person"
 
   create-turtles N [
     set color white
@@ -75,12 +78,14 @@ to setup
     set my-data-names []
 
     ;; Set the agent's strategy!
-    ;;ifelse (random-float 1) > p [ set strategy strategy1 ] [ set strategy strategy2 ]
-    set strategy 0 ;; UNUSED
+    ifelse (random-float 1) > p [ set strategy strategy1 ] [ set strategy strategy2 ]
+    ;;set strategy 0
 
-    ;; assign one of the params from the population to this agent
-    set-data "params" item who current-param-population
-    set-data "biases" random-normalized-vector 3
+    if use-meta-ga? [
+      ;; assign one of the params from the population to this agent
+      set-data "params" item who current-param-population
+      set-data "biases" random-normalized-vector 3
+    ]
   ]
 
   reset-ticks
@@ -113,9 +118,11 @@ to go
 end
 
 to finish-game
-  type "Fitness: "
-  print round(get-current-fitness)
-  record-mutation-fitness
+  if use-meta-ga? [
+    type "Fitness: "
+    print round(get-current-fitness)
+    record-mutation-fitness
+  ]
 end
 
 to display-world
@@ -132,7 +139,7 @@ to display-world
   let pool-labels ["Pool 0: STABLE" "Pool 1: LOW" "Pool 2: HIGH"]
 
   ;; for plotting strategies etc
-  set strategy-colors [22 32 42 72 82 112 122 132 25 35 45 75 85 115 125 135]
+  set strategy-colors [25 22 32 42 72 82 112 122 132  35 45 75 85 115 125 135]
 
   ;; color the rows representing pools
   foreach [0 1 2] [ pool-num ->
@@ -524,29 +531,31 @@ to set-data [name value]
 end
 
 to pick-next-pool
-  ;;set pool one-of [0 1 2]
+  ifelse use-meta-ga? [
+    set pool strategy-parameterized (get-data "params") (get-data "biases")
+  ][
+    ;;set pool one-of [0 1 2]
 
-  if strategy = 0 [ set pool strategy-random ]
-  if strategy = 1 [ set pool strategy-sitting-duck 0 ]
-  if strategy = 2 [ set pool strategy-sitting-duck 1 ]
-  if strategy = 3 [ set pool strategy-sitting-duck 2 ]
-  if strategy = 4 [ set pool strategy-slow-random 5 ]
-  if strategy = 5 [ set pool strategy-check-last-round ]
-  if strategy = 6 [ set pool strategy-favor-stable 5 10]
-  if strategy = 7 [ set pool strategy-switching-matrix-1 ]
-  if strategy = 8 [ set pool strategy-switching-matrix-2 ]
-  if strategy = 9 [ set pool strategy-turn-taker ]
-  if strategy = 10 [ set pool strategy-weighted-memory mem-size ]
+    if strategy = 0 [ set pool strategy-random ]
+    if strategy = 1 [ set pool strategy-sitting-duck 0 ]
+    if strategy = 2 [ set pool strategy-sitting-duck 1 ]
+    if strategy = 3 [ set pool strategy-sitting-duck 2 ]
+    if strategy = 4 [ set pool strategy-slow-random 5 ]
+    if strategy = 5 [ set pool strategy-check-last-round ]
+    if strategy = 6 [ set pool strategy-favor-stable 5 10]
+    if strategy = 7 [ set pool strategy-switching-matrix-1 ]
+    if strategy = 8 [ set pool strategy-switching-matrix-2 ]
+    if strategy = 9 [ set pool strategy-turn-taker ]
+    if strategy = 10 [ set pool strategy-weighted-memory mem-size ]
 
-  ;;set pool strategy-parameterized 0 0.1 0.6 0.3 0 0
-  ;;if ticks = 0 [
-  ;;  set-data "my-bias-pool" one-of [0 1 2]
-  ;;]
-  ;;let biases replace-item (get-data "my-bias-pool") [0 0 0] 1
-  ;;let the-x (1 - the-b - the-r - the-h)
-  ;;set pool strategy-parameterized the-b the-x the-r the-h (item 0 biases) (item 1 biases) (item 2 biases)
-
-  set pool strategy-parameterized (get-data "params") (get-data "biases")
+    ;;set pool strategy-parameterized 0 0.1 0.6 0.3 0 0
+    ;;if ticks = 0 [
+    ;;  set-data "my-bias-pool" one-of [0 1 2]
+    ;;]
+    ;;let biases replace-item (get-data "my-bias-pool") [0 0 0] 1
+    ;;let the-x (1 - the-b - the-r - the-h)
+    ;;set pool strategy-parameterized the-b the-x the-r the-h (item 0 biases) (item 1 biases) (item 2 biases)
+  ]
 
   set my-choice-history (record my-choice-history pool)
 end
@@ -966,7 +975,7 @@ to-report strategy-switching-matrix-2
   let S get-data "S"
 
   foreach indices-to-replace [ i ->
-    let mutated mutate-switching-probabilities S mutation-magnitude
+    let mutated mutate-switching-probabilities S mutation-magnitude-sp
     set S-variants replace-item i S-variants mutated
   ]
   set-data "S-variants" S-variants
@@ -1065,7 +1074,7 @@ to-report strategy-parameterized [component-weights bias-weights]
   let poolB strategy-weighted-random (item 0 bias-weights) (item 1 bias-weights) (item 2 bias-weights)
   let poolX strategy-random
   let poolR strategy-risk-reduction
-  let poolH strategy-check-last-t-rounds 20
+  let poolH strategy-switching-matrix-1 ;; strategy-check-last-t-rounds 20
 
   let choices (list poolB poolX poolR poolH)
 
@@ -1078,10 +1087,10 @@ to-report strategy-parameterized [component-weights bias-weights]
 end
 @#$#@#$#@
 GRAPHICS-WINDOW
-11
-559
-1624
-808
+5
+490
+1617
+738
 -1
 -1
 15.0
@@ -1120,10 +1129,10 @@ NIL
 HORIZONTAL
 
 SLIDER
-14
-74
-186
-107
+13
+52
+185
+85
 N
 N
 1
@@ -1136,9 +1145,9 @@ HORIZONTAL
 
 BUTTON
 13
-253
+200
 87
-286
+233
 Setup
 setup
 NIL
@@ -1153,9 +1162,9 @@ NIL
 
 BUTTON
 13
-300
+247
 86
-333
+280
 Go
 go
 T
@@ -1170,9 +1179,9 @@ NIL
 
 BUTTON
 103
-299
+246
 200
-332
+279
 Go 1 Tick
 go
 NIL
@@ -1186,10 +1195,10 @@ NIL
 1
 
 PLOT
-524
-284
-761
-468
+403
+329
+563
+449
 Total Wealth
 Rounds
 Wealth
@@ -1204,10 +1213,10 @@ PENS
 "default" 1.0 0 -16777216 true "" "plot total-wealth"
 
 PLOT
-794
-30
-1349
-199
+634
+10
+902
+179
 Agents choosing each pool
 Round
 Number of agents
@@ -1224,21 +1233,21 @@ PENS
 "pen-2" 1.0 0 -2674135 true "" "plot get-for-pool recent-agent-history 2"
 
 MONITOR
-377
-478
-521
-551
+362
+28
+486
+93
 Total Wealth
 total-wealth
 1
 1
-18
+16
 
 PLOT
-1149
-377
-1349
-527
+824
+326
+1027
+446
 Wealth distribution
 NIL
 NIL
@@ -1253,10 +1262,10 @@ PENS
 "default" 1.0 1 -16777216 true "" "histogram [wealth] of turtles"
 
 PLOT
-219
-284
-516
-469
+230
+330
+390
+450
 Wealth by group (per turtle)
 NIL
 NIL
@@ -1270,10 +1279,10 @@ true
 PENS
 
 BUTTON
-15
-348
-200
-381
+14
+285
+199
+318
 Setup & Go 100 ticks
 setup\nrepeat 100 [ go ]\nfinish-game\n\n;;let strategies remove-duplicates [strategy] of turtles\n;;show map [i -> list (item i strategies) precision ((mean [wealth] of turtles with [strategy = (item i strategies)]) / ticks) 3 ] range length strategies
 NIL
@@ -1288,9 +1297,9 @@ NIL
 
 BUTTON
 128
-253
+200
 198
-286
+233
 reset
 set tau 0.5\nset N 50
 NIL
@@ -1304,21 +1313,21 @@ NIL
 1
 
 MONITOR
-214
-479
-358
-552
+226
+29
+350
+94
 Mean wealth
 mean [wealth] of turtles
 2
 1
-18
+16
 
 SLIDER
-15
-121
-187
-154
+14
+89
+186
+122
 p
 p
 0
@@ -1330,10 +1339,10 @@ NIL
 HORIZONTAL
 
 PLOT
-228
-20
-737
-275
+221
+118
+604
+317
 Individual agents wealth
 NIL
 NIL
@@ -1348,25 +1357,25 @@ PENS
 "default" 1.0 0 -16777216 true "" ""
 
 SLIDER
-1388
-47
-1560
-80
+934
+77
+1106
+110
 num-variants
 num-variants
-0
+1
 20
-0.0
+1.0
 1
 1
 NIL
 HORIZONTAL
 
 PLOT
-794
-209
-1352
-329
+634
+189
+909
+309
 Payoff per pool
 NIL
 NIL
@@ -1383,40 +1392,40 @@ PENS
 "pen-2" 1.0 0 -2674135 true "" "plot item 2 (first payoff-history)"
 
 SLIDER
-1396
-59
-1571
-92
+933
+42
+1108
+75
 percent-to-replace
 percent-to-replace
 0
 1
-0.0
+1.0
 0.1
 1
 NIL
 HORIZONTAL
 
 SLIDER
-1381
-369
-1585
-402
+1057
+283
+1261
+316
 mutation-magnitude
 mutation-magnitude
 0
 0.5
-0.1
+0.4
 0.05
 1
 NIL
 HORIZONTAL
 
 PLOT
-801
-376
-1121
-526
+587
+330
+799
+450
 Agent variance, last 10 turns
 NIL
 NIL
@@ -1431,10 +1440,10 @@ PENS
 "default" 1.0 0 -16777216 true "" "plot agent-variance"
 
 SLIDER
-1386
-126
-1558
-159
+1193
+40
+1365
+73
 mem-size
 mem-size
 0
@@ -1446,50 +1455,50 @@ NIL
 HORIZONTAL
 
 CHOOSER
-12
-176
-104
-221
+9
+133
+101
+178
 strategy1
 strategy1
 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
-0
+8
 
 CHOOSER
-111
-176
-203
-221
+108
+133
+200
+178
 strategy2
 strategy2
 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
-0
+8
 
 TEXTBOX
-1381
-40
-1621
-85
+932
+15
+1172
+33
 Params for SwitchingMatrix strategies\n
 12
 0.0
 1
 
 TEXTBOX
-1379
-116
-1630
-161
+1196
+18
+1447
+36
 Params for WeightedMemory strategies
 12
 0.0
 1
 
 SLIDER
-1383
-185
-1555
-218
+1289
+369
+1461
+402
 the-b
 the-b
 0
@@ -1501,10 +1510,10 @@ NIL
 HORIZONTAL
 
 SLIDER
-1391
-199
-1563
-232
+1297
+383
+1469
+416
 the-r
 the-r
 0
@@ -1516,10 +1525,10 @@ NIL
 HORIZONTAL
 
 SLIDER
-1402
-209
-1574
-242
+1308
+393
+1480
+426
 the-h
 the-h
 0
@@ -1531,10 +1540,10 @@ NIL
 HORIZONTAL
 
 MONITOR
-1415
-219
-1472
-264
+1321
+403
+1378
+448
 the-x
 1 - the-h - the-b - the-r
 17
@@ -1542,21 +1551,21 @@ the-x
 11
 
 MONITOR
-579
-474
-756
-547
+497
+27
+594
+92
 gini index
 gini-index [wealth] of turtles
 3
 1
-18
+16
 
 SLIDER
-1381
-323
-1629
-356
+1059
+245
+1273
+278
 num-param-pop-mutations
 num-param-pop-mutations
 1
@@ -1568,35 +1577,35 @@ NIL
 HORIZONTAL
 
 TEXTBOX
-1385
-287
-1535
-317
+1063
+220
+1258
+239
 Population GA parameters
 12
 0.0
 1
 
 SLIDER
-1383
-408
-1584
-441
+1061
+330
+1262
+363
 mutation-probability
 mutation-probability
 0
 1
-0.7
+0.8
 0.05
 1
 NIL
 HORIZONTAL
 
 SLIDER
-1377
-452
-1598
-485
+1055
+374
+1276
+407
 contraction-magnitude
 contraction-magnitude
 0
@@ -1608,10 +1617,10 @@ NIL
 HORIZONTAL
 
 SLIDER
-1376
-489
-1595
-522
+1054
+411
+1273
+444
 contraction-probability
 contraction-probability
 0
@@ -1623,10 +1632,10 @@ NIL
 HORIZONTAL
 
 BUTTON
-16
-487
-114
-520
+14
+435
+112
+468
 CLEAR ALL
 clear-output\nclear-all\nrandom-seed 2345
 NIL
@@ -1640,11 +1649,11 @@ NIL
 1
 
 BUTTON
-18
-447
-173
-480
-Run Ng Generations
+13
+391
+118
+424
+Run Ng Gens
 repeat Ng * num-param-pop-mutations [\n  setup\n  repeat 100 [ go ]\n  finish-game\n]
 NIL
 1
@@ -1657,15 +1666,58 @@ NIL
 1
 
 INPUTBOX
-131
-491
-200
-551
+129
+404
+198
+464
 Ng
-40.0
+50.0
 1
 0
 Number
+
+SLIDER
+933
+111
+1158
+144
+mutation-magnitude-sp
+mutation-magnitude-sp
+0
+1
+0.5
+0.01
+1
+NIL
+HORIZONTAL
+
+SWITCH
+13
+345
+201
+378
+use-meta-ga?
+use-meta-ga?
+1
+1
+-1000
+
+BUTTON
+940
+160
+1037
+193
+1 1 0.5 :)
+set percent-to-replace 1\nset num-variants 1\nset mutation-magnitude-sp 0.5
+NIL
+1
+T
+OBSERVER
+NIL
+NIL
+NIL
+NIL
+1
 
 @#$#@#$#@
 ## WHAT IS IT?
@@ -2242,56 +2294,38 @@ random-seed 2345</setup>
 ]</go>
     <timeLimit steps="1"/>
     <metric>mutation-history</metric>
-    <enumeratedValueSet variable="contraction-magnitude">
-      <value value="0"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="the-b">
-      <value value="0"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="mutation-probability">
-      <value value="0.7"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="Ng">
-      <value value="40"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="p">
-      <value value="0"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="contraction-probability">
-      <value value="0"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="percent-to-replace">
-      <value value="0"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="the-r">
-      <value value="0"/>
-    </enumeratedValueSet>
     <enumeratedValueSet variable="N">
       <value value="50"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="strategy1">
-      <value value="0"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="mutation-magnitude">
-      <value value="0.1"/>
     </enumeratedValueSet>
     <enumeratedValueSet variable="tau">
       <value value="0"/>
     </enumeratedValueSet>
-    <enumeratedValueSet variable="num-param-pop-mutations">
-      <value value="5"/>
+    <enumeratedValueSet variable="percent-to-replace">
+      <value value="1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="num-variants">
+      <value value="1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="mutation-magnitude-sp">
+      <value value="1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="p">
+      <value value="0"/>
     </enumeratedValueSet>
     <enumeratedValueSet variable="mem-size">
       <value value="0"/>
     </enumeratedValueSet>
-    <enumeratedValueSet variable="strategy2">
-      <value value="0"/>
+    <enumeratedValueSet variable="mutation-probability">
+      <value value="0.8"/>
     </enumeratedValueSet>
-    <enumeratedValueSet variable="num-variants">
-      <value value="0"/>
+    <enumeratedValueSet variable="num-param-pop-mutations">
+      <value value="5"/>
     </enumeratedValueSet>
-    <enumeratedValueSet variable="the-h">
-      <value value="0"/>
+    <enumeratedValueSet variable="mutation-magnitude">
+      <value value="0.4"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="Ng">
+      <value value="50"/>
     </enumeratedValueSet>
   </experiment>
 </experiments>
