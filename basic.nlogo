@@ -355,6 +355,12 @@ to-report nested-precision [ array2d decimal-places ]
   report map [i -> map [j -> precision j decimal-places ] i] array2d
 end
 
+to-report clamp [i clamp_min clamp_max]
+  set i min list i clamp_max
+  set i max list i clamp_min
+  report i
+end
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
 ;; SYSTEM MEASURES
@@ -792,6 +798,38 @@ to-report random-normalized-vector [ dim ]
   report v
 end
 
+to-report init-switching-probabilities-random
+  report n-values 3 [ n-values 3 [ random-float 1 ] ]
+end
+
+to-report init-switching-probabilities-equal
+  report n-values 3 [ n-values 3 [ 1 / 9] ]
+end
+
+to-report init-switching-probabilities-optimistic
+  ;; Switching matrix with a high probability to go/stay in stable, and a low probability for the others.
+  let Plarge 0.8
+  let Psmall 0.1
+  report n-values 3 [ i ->
+    n-values 3 [ j ->
+      ifelse-value (j = 0) [ Plarge ] [ Psmall ]
+    ]
+  ]
+end
+
+to-report init-switching-probabilities-pessimistic
+  ;; Switching matrix with a high probability to go to high/low (greedy/risky)
+  let Plarge 0.4
+  let Psmall 0.2
+  report n-values 3 [ i ->
+    n-values 3 [ j ->
+      ifelse-value (j = 0) [ Psmall ] [ Plarge ]
+    ]
+  ]
+end
+
+
+
 ;; get S, matrix of probabilities for an agent to switch from pool i to pool j
 to-report get-switching-probabilities [var-name]
   let S []
@@ -806,7 +844,19 @@ to-report get-switching-probabilities [var-name]
     ;;   probability for an agent to switch from pool i to pool 2
     ;; ]
 
-    set S n-values 3 [ n-values 3 [ random-float 1 ] ]
+    if who mod 4 = 0 [
+      set S init-switching-probabilities-random
+    ]
+    if who mod 4 = 1 [
+      set S init-switching-probabilities-equal
+    ]
+    if who mod 2 = 0 [
+      set S init-switching-probabilities-optimistic
+    ]
+    if who mod 2 = 1 [
+      set S init-switching-probabilities-pessimistic
+    ]
+
 
     ;; normalize the columns (so that probabilities to 1)
     foreach [0 1 2] [ col-num ->
@@ -831,11 +881,16 @@ to-report mutate-switching-probabilities [ S magnitude ]
   foreach [0 1 2] [col-num ->
     let column item col-num S
 
-    let m0 ((random-float 1) * 2 - 1) * magnitude
-    let m1 ((random-float 1) * 2 - 1) * magnitude
+    let m0 clamp (((random-float 1) * 2 - 1) * magnitude) 0 1
+    let m1 clamp (((random-float 1) * 2 - 1) * magnitude) 0 1
     let m2 0 - m0 - m1
 
     let mutated-column vector-add column (list m0 m1 m2)
+
+    ;; make sure they're positive and normalized
+    set mutated-column map [i -> clamp i 0 1] mutated-column
+    set mutated-column normalize-probability-vector mutated-column
+
     set S-mutated lput mutated-column S-mutated
   ]
 
@@ -900,20 +955,24 @@ to-report strategy-switching-matrix-1
   let min-error 9999
 
   ;; Check previous two rounds, and retroactively see which S matrix would have been best
-  let agents-turn-1 first but-first agent-history
-  let agents-turn-2 first agent-history
+  let m 10
+  set m clamp m 0 length agent-history
+  let agents-in-recent-turns sublist agent-history 0 m
 
   ;; see what the max payoff would have been
-  let actual-payoffs calculate-my-possible-payoffs agents-turn-2
-  let actual-max-payoff max actual-payoffs
 
   foreach S-variants [ S ->
 
     ;; simulate prediction with this S
-    let agents-predicted-turn-2 matrix-dot-vector S agents-turn-1
-    let payoff-prediction calculate-my-possible-payoffs agents-predicted-turn-2
+    let prediction-error 0
+    foreach agents-in-recent-turns [ ah ->
+      let actual-payoffs calculate-my-possible-payoffs ah
+      let actual-max-payoff max actual-payoffs
+      let agents-predicted matrix-dot-vector S ah
+      let payoff-prediction calculate-my-possible-payoffs agents-predicted
 
-    let prediction-error vector-sumsquares (vector-diff agents-predicted-turn-2 agents-turn-2)
+      set prediction-error prediction-error + vector-sumsquares (vector-diff agents-predicted ah)
+    ]
 
     if prediction-error < min-error [
       set min-error prediction-error
@@ -947,7 +1006,9 @@ to-report strategy-switching-matrix-1
 
   ;; let's go to the pool with highest predicted payoff
   let max-payoff max payoff-prediction
-  report position max-payoff payoff-prediction
+  let pools-with-max-payoff filter [ i -> (item i payoff-prediction) = max-payoff] (range length payoff-prediction)
+  report one-of pools-with-max-payoff
+  ;;report position max-payoff payoff-prediction
 end
 
 ;; Same as predictive-strategy-1 but with some stochasticity.
@@ -1121,7 +1182,7 @@ SLIDER
 tau
 tau
 0
-1
+5
 0.0
 0.01
 1
@@ -1365,7 +1426,7 @@ num-variants
 num-variants
 1
 20
-1.0
+20.0
 1
 1
 NIL
@@ -1400,17 +1461,17 @@ percent-to-replace
 percent-to-replace
 0
 1
-1.0
+0.8
 0.1
 1
 NIL
 HORIZONTAL
 
 SLIDER
-1057
-283
-1261
-316
+1267
+187
+1471
+220
 mutation-magnitude
 mutation-magnitude
 0
@@ -1562,10 +1623,10 @@ gini-index [wealth] of turtles
 16
 
 SLIDER
-1059
-245
-1273
-278
+1269
+149
+1483
+182
 num-param-pop-mutations
 num-param-pop-mutations
 1
@@ -1577,20 +1638,20 @@ NIL
 HORIZONTAL
 
 TEXTBOX
-1063
-220
-1258
-239
+1273
+124
+1468
+143
 Population GA parameters
 12
 0.0
 1
 
 SLIDER
-1061
-330
-1262
-363
+1271
+234
+1472
+267
 mutation-probability
 mutation-probability
 0
@@ -1602,10 +1663,10 @@ NIL
 HORIZONTAL
 
 SLIDER
-1055
-374
-1276
-407
+1265
+278
+1486
+311
 contraction-magnitude
 contraction-magnitude
 0
@@ -1617,10 +1678,10 @@ NIL
 HORIZONTAL
 
 SLIDER
-1054
-411
-1273
-444
+1264
+315
+1483
+348
 contraction-probability
 contraction-probability
 0
@@ -1685,7 +1746,7 @@ mutation-magnitude-sp
 mutation-magnitude-sp
 0
 1
-0.5
+0.81
 0.01
 1
 NIL
@@ -1705,10 +1766,27 @@ use-meta-ga?
 BUTTON
 940
 160
-1037
+1152
 193
-1 1 0.5 :)
+ARGH NOT A SWEET SPOT
 set percent-to-replace 1\nset num-variants 1\nset mutation-magnitude-sp 0.5
+NIL
+1
+T
+OBSERVER
+NIL
+NIL
+NIL
+NIL
+1
+
+BUTTON
+939
+213
+1133
+246
+Default to one static S
+set percent-to-replace 0\nset num-variants 1\nset mutation-magnitude-sp 0
 NIL
 1
 T
