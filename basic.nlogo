@@ -1,3 +1,5 @@
+extensions [ nw ]
+
 globals [
   ;; Each pool is represented by a row
   pool-height
@@ -19,9 +21,11 @@ globals [
   current-mutation
   mutation-history ;; list of [fitness, generation, mutation]. MOST RECENT AT END
   generation-count
+  current-repeat
 
-
+  pop
   temp-pop
+  temp-s
 
 ]
 
@@ -33,12 +37,15 @@ turtles-own [
   my-data
   my-data-names
   strategy
+  group
 ]
 
 
 to setup
 
   ;; persist these globals across multiple runs
+  let saved-current-repeat current-repeat
+  let saved-pop pop
   let saved-param-population-mutations param-population-mutations
   let saved-current-mutation current-mutation
   let saved-mutation-history mutation-history
@@ -48,15 +55,20 @@ to setup
   set current-mutation saved-current-mutation
   set mutation-history saved-mutation-history
   set generation-count saved-generation-count
+  set pop saved-pop
+  set current-repeat saved-current-repeat
 
   let current-param-population []
-  if use-meta-ga? [
+  if use-meta-ga? and not is-list? pop [
     iterate-parameter-population
     set current-param-population (item current-mutation param-population-mutations)
 
-    type "Running mutation "
-    print current-mutation
-    show nested-precision (current-param-population) 2
+
+    if print-ga-to-console? [
+      type "Running mutation "
+      print current-mutation
+      show nested-precision (current-param-population) 2
+    ]
   ]
 
   set num-strategies 16
@@ -68,7 +80,15 @@ to setup
 
   set-default-shape turtles "person"
 
-  create-turtles N [
+
+  ifelse (use-sharing? and not (use-groups? and num-groups > 0)) [
+    nw:generate-watts-strogatz turtles links N 2 0.5
+    ;;nw:generate-preferential-attachment turtles links N 3
+  ] [
+    create-turtles N
+  ]
+
+  ask turtles [
     set color white
     set my-choice-history []
     set my-payoff-history []
@@ -81,14 +101,48 @@ to setup
     ifelse (random-float 1) > p [ set strategy strategy1 ] [ set strategy strategy2 ]
     ;;set strategy 0
 
+    if use-tournament-turtle and who = 0 [
+      set strategy 99
+    ]
+
+    ifelse (use-groups? and num-groups > 0) [
+      set group one-of range num-groups
+    ]
+    [
+      set group -1
+    ]
+
     if use-meta-ga? [
       ;; assign one of the params from the population to this agent
-      set-data "params" item who current-param-population
-      set-data "biases" random-normalized-vector 3
+      ifelse not is-list? pop [
+        set-data "params" item who current-param-population
+        set-data "biases" random-normalized-vector 3
+      ] [
+        ;; Overrides whatever current-param-population is. (Which was the output of the ga mutation)
+        set-data "params" item who pop
+        set-data "biases" random-normalized-vector 3
+      ]
+    ]
+  ]
+
+
+  if (use-groups? and num-groups > 0) [
+    ask turtles [
+      let my-group group
+      let me-who who
+      create-links-with (turtles with [ group = my-group and who != me-who ])
     ]
   ]
 
   reset-ticks
+end
+
+to assign-params-to-turtles [params]
+  ask turtles [
+    ;; assign one of the params from the population to this agent
+    set-data "params" item who params
+    set-data "biases" random-normalized-vector 3
+  ]
 end
 
 to go
@@ -109,6 +163,10 @@ to go
 
   display-payoff-on-patches
 
+  ask links [
+    share-models
+  ]
+
   ;; Agents get their reward
   ask turtles [
     collect-payoff
@@ -119,15 +177,18 @@ end
 
 to finish-game
   if use-meta-ga? [
-    type "Fitness: "
-    print round(get-current-fitness)
+
+    if print-ga-to-console? [
+      type "Fitness: "
+      print round(get-current-fitness)
+    ]
     record-mutation-fitness
   ]
 end
 
 to display-world
   set left-margin 6
-  set x-step-size 1
+  set x-step-size 3
   set-patch-size 15
   set pool-height 5
   ;;set pool-length 20
@@ -139,13 +200,13 @@ to display-world
   let pool-labels ["Pool 0: STABLE" "Pool 1: LOW" "Pool 2: HIGH"]
 
   ;; for plotting strategies etc
-  set strategy-colors [25 22 32 42 72 82 112 122 132  35 45 75 85 115 125 135]
+  set strategy-colors [0 25 22 32 42 72 82 112 122 132  35 45 75 85 115 125 135]
 
   ;; color the rows representing pools
   foreach [0 1 2] [ pool-num ->
     let pool-patches patches with [pxcor > left-margin and (pycor >= (pool-num * pool-height) and pycor < ((pool-num + 1) * pool-height))]
     ask pool-patches [ set pcolor (item pool-num pool-colors) ]
-    ask patch (left-margin - 1) (pool-num * pool-height) [ set plabel (item pool-num pool-labels) ]
+    ask patch (left-margin - 1) (pool-num * pool-height + 2) [ set plabel (item pool-num pool-labels) ]
   ]
 end
 
@@ -154,7 +215,7 @@ to display-payoff-on-patches
   let pool-colors [67 107 17]
   foreach [1 2] [ pool-num ->
     if item pool-num first payoff-history > 0 [
-      let pool-patches patches with [pxcor = (left-margin + 1 + ticks * x-step-size) and (pycor >= (pool-num * pool-height) and pycor < ((pool-num + 1) * pool-height))]
+      let pool-patches patches with [pxcor >= (left-margin + 1 + ticks * x-step-size) and pxcor < (left-margin + 1 + (ticks + 1) * x-step-size) and (pycor >= (pool-num * pool-height) and pycor < ((pool-num + 1) * pool-height))]
       ask pool-patches [ set pcolor (item pool-num pool-colors) ]
     ]
   ]
@@ -170,14 +231,20 @@ to iterate-parameter-population
   ifelse not is-list? param-population-mutations or length param-population-mutations != num-param-pop-mutations [
     ;; At the start: the populations have not been initialized yet
     ;; 1. Spawn a random set of populations
-    print "** Spawning Initial Populations **"
+      if print-ga-to-console? [
+        print "** Spawning Initial Populations **"
+      ]
     set param-population-mutations n-values num-param-pop-mutations [ spawn-population ]
     set mutation-history []
     set generation-count 0
 
     ;; 2. We'll start by evaluating the first one
     set current-mutation 0
+    set current-repeat 0
   ] [
+    ;; Repeat 3 times
+    set current-repeat current-repeat + 1
+
     ;; Between runs: we try out each mutation
 
     ;; 1. Try the next mutation
@@ -198,21 +265,29 @@ to iterate-parameter-population
         ifelse-value ((first best-so-far) > (first next)) [ best-so-far ] [ next ]
       ] last-mutations
 
-      print "**"
-      type "The best mutation had fitness "
-      print round first best-mutation
-      print nested-precision (last best-mutation) 2
-      print "Mutating it!"
-      print "**"
-      type "Generation "
-      print generation-count
-      print "**"
+      if print-ga-to-console? [
+        print "**"
+        type "The best mutation had fitness "
+        print round first best-mutation
+        print nested-precision (last best-mutation) 2
+        print "Mutating it!"
+        print "**"
+        type "Generation "
+        print generation-count
+        print "**"
+      ]
+
+      let num-mutations-to-keep clamp keep-mutations 0 (num-param-pop-mutations - 1)
+      let mutations-to-keep n-of (clamp keep-mutations 0 (num-param-pop-mutations - 1)) param-population-mutations ;; note: this list might include best-mutation
 
       ;; spawn copies of the best...
-      set param-population-mutations n-values num-param-pop-mutations [ last best-mutation ]
+      set param-population-mutations n-values (num-param-pop-mutations - num-mutations-to-keep) [ last best-mutation ]
 
       ;; ...and then mutate all of them
       set param-population-mutations (map mutate-population param-population-mutations)
+
+      ;; And keep the ones we want to stick around.
+      set param-population-mutations sentence param-population-mutations mutations-to-keep
 
       ;; After mutating, we will start over by evaluating the first mutation
       set current-mutation 0
@@ -279,14 +354,19 @@ to-report mutate-population [ param-population ]
 end
 
 to record-mutation-fitness
-  if is-list? param-population-mutations [
+  if is-list? param-population-mutations and not is-list? pop [
     let current-param-population (item current-mutation param-population-mutations)
-    set mutation-history lput (list get-current-fitness generation-count current-param-population) mutation-history
+    let turtle-wealths  map  [i -> [wealth] of turtle i ] range N ;; [wealth] of turtles is not sorted.
+    set mutation-history lput (list get-current-fitness generation-count turtle-wealths current-param-population) mutation-history
   ]
 end
 
 to-report get-current-fitness
-  report total-wealth * (1 - gini-index [wealth] of turtles)
+  report ifelse-value use-gini-in-fitness? [
+    total-wealth * (1 - gini-index [wealth] of turtles)
+  ] [
+    total-wealth
+  ]
 end
 
 to display-mutation-history
@@ -359,6 +439,18 @@ to-report clamp [i clamp_min clamp_max]
   set i min list i clamp_max
   set i max list i clamp_min
   report i
+end
+
+to-report is-switching-matrix-equal? [ s1 s2 ]
+  let equal true
+  foreach range 3 [i ->
+    let col1 item i s1
+    let col2 item i s2
+    foreach range 3 [j ->
+      if (item j col1) != (item j col2) [ set equal false ]
+    ]
+  ]
+  report equal
 end
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -554,6 +646,16 @@ to pick-next-pool
     if strategy = 9 [ set pool strategy-turn-taker ]
     if strategy = 10 [ set pool strategy-weighted-memory mem-size ]
 
+    if strategy = 99 [
+      let low-payoff map [i -> first but-first i ] payoff-history
+      let high-payoff map [i -> last i ] payoff-history
+      let low-number map [i -> first but-first i ] agent-history
+      let high-number map [i -> last i ] agent-history
+      let my-payoffs my-payoff-history
+      let my-choices my-choice-history
+      set pool choose-strategy-9  low-payoff high-payoff low-number high-number my-payoffs my-choices
+    ]
+
     ;;set pool strategy-parameterized 0 0.1 0.6 0.3 0 0
     ;;if ticks = 0 [
     ;;  set-data "my-bias-pool" one-of [0 1 2]
@@ -567,7 +669,7 @@ to pick-next-pool
 end
 
 to move-to-pool
-  let new-x (xcor + x-step-size)
+  let new-x ((xcor) + x-step-size)
   let new-y (pool * pool-height) + (random-float (pool-height - 1))
 
   set color item strategy strategy-colors
@@ -575,7 +677,7 @@ to move-to-pool
   ifelse ticks = 0
   [
     pen-up
-    set new-x left-margin + 1
+    set new-x left-margin + 2
     setxy new-x new-y
   ]
   [
@@ -583,13 +685,13 @@ to move-to-pool
     if (first my-choice-history) = (first (but-first my-choice-history)) [
       set new-y ycor
     ]
-    carefully [ setxy new-x new-y ] []
+    carefully [ setxy (new-x) new-y ] []
   ]
 end
 
 to move-to-pool-1
   let my-sub-row floor (who / pool-length)
-  let x 7 + (who mod pool-length)
+  let x 7 + (who mod pool-length) + 2
   let y (pool * pool-height) + my-sub-row
   move-to patch x y
 end
@@ -622,6 +724,58 @@ to-report choose-strategy-ID [ low-payoff high-payoff low-number high-number my-
   ;;CODE CODE CODE CODE
   let pool_ 1
   report pool_
+end
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; LINKS
+;;
+
+to share-models
+  let S-variants-1 [ get-data "S-variants" ] of end1
+  let S-variants-2 [ get-data "S-variants" ] of end2
+  if (is-list? S-variants-1) and (is-list? S-variants-2) and (length S-variants-1 > 0) and (length S-variants-2 > 0) [
+    ;; Both turtles have an S, so they can swap their best ones!
+
+    let best-variant-1 first S-variants-1
+    let best-variant-2 first S-variants-2
+
+    ;; Doing these redundancy checks isn't great (from a performance perspective) but it's better than filling up the agent memory with a bunch of duplicates.
+
+    let redundant-1 false
+    let redundant-2 false
+
+    ;; is best-variant-2 already in agent 1's list?
+    foreach S-variants-1 [ S1 ->
+      if is-switching-matrix-equal? S1 best-variant-2 [ set redundant-1 true ]
+    ]
+
+    ;; is best-variant-1 already in agent 2's list?
+    foreach S-variants-2 [ S2 ->
+      if is-switching-matrix-equal? S2 best-variant-1 [ set redundant-2 true ]
+    ]
+
+    if not redundant-1 [
+      ask end1 [
+        ;; make sure not to overflow the variants list
+        if length S-variants-1 = max-variants [
+          set S-variants-1 remove-item (one-of range max-variants) S-variants-1
+        ]
+        set-data "S-variants" lput best-variant-2 S-variants-1
+      ]
+    ]
+
+    if not redundant-2 [
+      ask end2 [
+        ;; make sure not to overflow the variants list
+        if length S-variants-2 = max-variants [
+          set S-variants-2 remove-item (one-of range max-variants) S-variants-2
+        ]
+        set-data "S-variants" lput best-variant-1 S-variants-2
+      ]
+    ]
+  ]
 end
 
 
@@ -850,12 +1004,26 @@ to-report get-switching-probabilities [var-name]
     if who mod 4 = 1 [
       set S init-switching-probabilities-equal
     ]
-    if who mod 2 = 0 [
+
+
+    if who mod 3 = 0 [
       set S init-switching-probabilities-optimistic
     ]
-    if who mod 2 = 1 [
+    if who mod 3 = 1 [
       set S init-switching-probabilities-pessimistic
     ]
+    if who mod 3 = 2 [
+      set S init-switching-probabilities-random
+    ]
+
+    set S init-switching-probabilities-equal
+
+    let matrix-label reduce word (sentence "matrix" n-values 5 [ random 10 ])
+    set S lput matrix-label S
+
+    set S mutate-switching-probabilities S 0.2
+    set S lput matrix-label (but-last S)
+
 
 
     ;; normalize the columns (so that probabilities to 1)
@@ -876,6 +1044,7 @@ to-report get-switching-probabilities [var-name]
 end
 
 to-report mutate-switching-probabilities [ S magnitude ]
+  if magnitude = 0 [ report S ]
   let S-mutated []
 
   foreach [0 1 2] [col-num ->
@@ -894,8 +1063,37 @@ to-report mutate-switching-probabilities [ S magnitude ]
     set S-mutated lput mutated-column S-mutated
   ]
 
+  ;; label for this matrix shows that it's a child of the previous matrix
+  let matrix-label reduce word (sentence (last S) "_" n-values 3 [random 9])
+  set S-mutated lput matrix-label S-mutated
+
   report S-mutated
 end
+
+to-report get-best-switching-variant
+  let S-variants get-data "S-variants"
+  let S-errors get-data "S-errors"
+  if S-variants = 0 [ report 0 ] ;; no S matrices exist
+
+  let min-error min S-errors
+  let min-position position min-error S-errors
+  report item min-position S-variants
+end
+
+
+to-report get-prediction-error [S turns-ago]
+  if (turns-ago > (length agent-history - 2)) [ report 0 ]
+  let agent-counts-0 item (turns-ago + 1) agent-history
+  let agent-counts-1 item turns-ago agent-history
+  let predicted-counts predict-counts S agent-counts-0
+  let prediction-error vector-sumsquares (vector-diff predicted-counts agent-counts-1)
+  report prediction-error
+end
+
+to-report predict-counts [S counts]
+  report matrix-dot-vector (but-last S) counts
+end
+
 
 to-report calculate-my-possible-payoffs [agent-pool-counts]
   let payoffs n-values 3 [ 0 ]
@@ -920,7 +1118,7 @@ end
 ;; STRATEGIES
 
 to-report predictive-strategy-1
-  let S get-switching-probabilities ["S"]
+  let S but-last get-switching-probabilities ["S"] ;; use but-last, because the S contains a label at the end
 
   if ticks = 0 [ report random-pool ]
 
@@ -944,6 +1142,7 @@ to-report strategy-switching-matrix-1
     ]
     set-data "S-variants" S-variants
     set-data "S" first S-variants
+    set-data "S-choices" []
   ][
     set S-variants get-data "S-variants"
   ]
@@ -951,32 +1150,38 @@ to-report strategy-switching-matrix-1
   if ticks = 0 [ report random-pool ]
   if ticks = 1 [ report predictive-strategy-1 ] ;; this will use the first S matrix and also set it
 
-  let S-min-error get-data "S"
-  let min-error 9999
+  let S-with-min-error get-data "S"
+  let min-error 9999999
 
-  ;; Check previous two rounds, and retroactively see which S matrix would have been best
-  let m 10
-  set m clamp m 0 length agent-history
-  let agents-in-recent-turns sublist agent-history 0 m
+  ;; Check previous m rounds, and retroactively see which S matrix would have been best
+  ;;let m 5
+  let mm m
+  set mm clamp m 0 length agent-history
+  let agents-in-recent-turns sublist agent-history 0 mm
 
   ;; see what the max payoff would have been
+
+  let S-errors []
+
 
   foreach S-variants [ S ->
 
     ;; simulate prediction with this S
     let prediction-error 0
-    foreach agents-in-recent-turns [ ah ->
-      let actual-payoffs calculate-my-possible-payoffs ah
+    foreach agents-in-recent-turns [ agent-counts ->
+      let actual-payoffs calculate-my-possible-payoffs agent-counts
       let actual-max-payoff max actual-payoffs
-      let agents-predicted matrix-dot-vector S ah
+      let agents-predicted matrix-dot-vector (but-last S) agent-counts
       let payoff-prediction calculate-my-possible-payoffs agents-predicted
 
-      set prediction-error prediction-error + vector-sumsquares (vector-diff agents-predicted ah)
+      set prediction-error prediction-error + vector-sumsquares (vector-diff agents-predicted agent-counts)
     ]
+
+    set S-errors lput prediction-error S-errors
 
     if prediction-error < min-error [
       set min-error prediction-error
-      set S-min-error S
+      set S-with-min-error S
     ]
     ;; ...
 
@@ -989,9 +1194,20 @@ to-report strategy-switching-matrix-1
     ;;]
   ]
 
+  ;; sort the variants best > worst
+  let sorted-positions sort-by [[i j] ->
+    (item i S-errors) < (item j S-errors)
+  ] range length S-variants
+
+  let sorted-S-variants map [i -> item i S-variants] sorted-positions
+  let sorted-S-errors map [i -> item i S-errors] sorted-positions
+
+
+  set-data "S-variants" sorted-S-variants
+  set-data "S-errors" sorted-S-errors
   set-data "error" min-error
-  set-data "S" S-min-error
-  let S S-min-error
+  set-data "S" S-with-min-error
+  let S S-with-min-error
 
   ;;if length S-best-choices > 0 [
   ;;  set S one-of S-best-choices
@@ -999,9 +1215,11 @@ to-report strategy-switching-matrix-1
   ;;]
 
   ;; now use this S matrix for our next choice
+  let S-choices get-data "S-choices"
+  set-data "S-choices" fput (last S) S-choices ;; only record labels
 
   let agents-previous-turn first agent-history
-  let agent-prediction matrix-dot-vector S agents-previous-turn
+  let agent-prediction matrix-dot-vector (but-last S) agents-previous-turn
   let payoff-prediction calculate-my-possible-payoffs agent-prediction
 
   ;; let's go to the pool with highest predicted payoff
@@ -1030,10 +1248,11 @@ to-report strategy-switching-matrix-2
   let choice strategy-switching-matrix-1
 
   ;; replace some S choices with variants of my latest used S
-  let num-replacements floor num-variants * percent-to-replace
-  let indices-to-replace n-of num-replacements range num-variants
   let S-variants get-data "S-variants"
   let S get-data "S"
+  let num-replacements floor num-variants * percent-to-replace
+  let indices-to-replace (range (length S-variants - num-replacements) (length S-variants))
+  ;;let indices-to-replace n-of num-replacements range num-variants ;; Random indices
 
   foreach indices-to-replace [ i ->
     let mutated mutate-switching-probabilities S mutation-magnitude-sp
@@ -1135,7 +1354,7 @@ to-report strategy-parameterized [component-weights bias-weights]
   let poolB strategy-weighted-random (item 0 bias-weights) (item 1 bias-weights) (item 2 bias-weights)
   let poolX strategy-random
   let poolR strategy-risk-reduction
-  let poolH strategy-switching-matrix-1 ;; strategy-check-last-t-rounds 20
+  let poolH strategy-weighted-memory 2 ;; strategy-check-last-t-rounds 20
 
   let choices (list poolB poolX poolR poolH)
 
@@ -1146,12 +1365,23 @@ to-report strategy-parameterized [component-weights bias-weights]
   let choice-index weighted-choice ww
   report item choice-index choices
 end
+
+
+;;;;;;;;;;;;
+
+;; Tournament!
+
+to-report choose-strategy-9 [ low-payoff high-payoff low-number high-number my-payoffs my-choices ]
+  let the-pool 0
+  report the-pool
+
+end
 @#$#@#$#@
 GRAPHICS-WINDOW
-5
-490
-1617
-738
+15
+420
+4628
+669
 -1
 -1
 15.0
@@ -1165,7 +1395,7 @@ GRAPHICS-WINDOW
 0
 1
 0
-106
+306
 0
 15
 1
@@ -1175,10 +1405,10 @@ ticks
 30.0
 
 SLIDER
-12
-17
-184
-50
+15
+20
+187
+53
 tau
 tau
 0
@@ -1190,10 +1420,10 @@ NIL
 HORIZONTAL
 
 SLIDER
-13
-52
-185
-85
+15
+55
+187
+88
 N
 N
 1
@@ -1205,10 +1435,10 @@ NIL
 HORIZONTAL
 
 BUTTON
-13
-200
-87
-233
+15
+95
+70
+128
 Setup
 setup
 NIL
@@ -1222,10 +1452,10 @@ NIL
 1
 
 BUTTON
-13
-247
-86
-280
+75
+95
+130
+128
 Go
 go
 T
@@ -1239,11 +1469,11 @@ NIL
 1
 
 BUTTON
-103
-246
-200
-279
-Go 1 Tick
+135
+95
+190
+128
+Go 1
 go
 NIL
 1
@@ -1256,10 +1486,10 @@ NIL
 1
 
 PLOT
-403
-329
-563
-449
+920
+275
+1140
+395
 Total Wealth
 Rounds
 Wealth
@@ -1274,10 +1504,10 @@ PENS
 "default" 1.0 0 -16777216 true "" "plot total-wealth"
 
 PLOT
-634
-10
-902
-179
+528
+105
+863
+270
 Agents choosing each pool
 Round
 Number of agents
@@ -1294,10 +1524,10 @@ PENS
 "pen-2" 1.0 0 -2674135 true "" "plot get-for-pool recent-agent-history 2"
 
 MONITOR
-362
-28
-486
-93
+360
+30
+484
+95
 Total Wealth
 total-wealth
 1
@@ -1305,10 +1535,10 @@ total-wealth
 16
 
 PLOT
-824
-326
-1027
-446
+440
+285
+643
+405
 Wealth distribution
 NIL
 NIL
@@ -1324,10 +1554,10 @@ PENS
 
 PLOT
 230
-330
-390
-450
-Wealth by group (per turtle)
+285
+431
+405
+Wealth by strategy
 NIL
 NIL
 0.0
@@ -1340,10 +1570,10 @@ true
 PENS
 
 BUTTON
-14
-285
-199
-318
+15
+135
+185
+168
 Setup & Go 100 ticks
 setup\nrepeat 100 [ go ]\nfinish-game\n\n;;let strategies remove-duplicates [strategy] of turtles\n;;show map [i -> list (item i strategies) precision ((mean [wealth] of turtles with [strategy = (item i strategies)]) / ticks) 3 ] range length strategies
 NIL
@@ -1357,10 +1587,10 @@ NIL
 1
 
 BUTTON
-128
-200
-198
-233
+1515
+10
+1585
+43
 reset
 set tau 0.5\nset N 50
 NIL
@@ -1374,10 +1604,10 @@ NIL
 1
 
 MONITOR
-226
-29
-350
-94
+230
+30
+354
+95
 Mean wealth
 mean [wealth] of turtles
 2
@@ -1385,10 +1615,10 @@ mean [wealth] of turtles
 16
 
 SLIDER
-14
-89
-186
-122
+1180
+145
+1352
+178
 p
 p
 0
@@ -1400,10 +1630,10 @@ NIL
 HORIZONTAL
 
 PLOT
-221
-118
-604
-317
+230
+105
+520
+271
 Individual agents wealth
 NIL
 NIL
@@ -1418,25 +1648,25 @@ PENS
 "default" 1.0 0 -16777216 true "" ""
 
 SLIDER
-934
-77
-1106
-110
+1493
+145
+1665
+178
 num-variants
 num-variants
 1
 20
-20.0
+0.0
 1
 1
 NIL
 HORIZONTAL
 
 PLOT
-634
-189
-909
-309
+1180
+285
+1455
+405
 Payoff per pool
 NIL
 NIL
@@ -1453,40 +1683,40 @@ PENS
 "pen-2" 1.0 0 -2674135 true "" "plot item 2 (first payoff-history)"
 
 SLIDER
-933
-42
-1108
-75
+1477
+137
+1652
+170
 percent-to-replace
 percent-to-replace
 0
 1
-0.8
+0.0
 0.1
 1
 NIL
 HORIZONTAL
 
 SLIDER
-1267
-187
-1471
-220
+930
+87
+1134
+120
 mutation-magnitude
 mutation-magnitude
 0
 0.5
-0.4
+0.0
 0.05
 1
 NIL
 HORIZONTAL
 
 PLOT
-587
-330
-799
-450
+650
+285
+862
+405
 Agent variance, last 10 turns
 NIL
 NIL
@@ -1516,30 +1746,30 @@ NIL
 HORIZONTAL
 
 CHOOSER
-9
-133
-101
-178
+1200
+210
+1292
+255
 strategy1
 strategy1
 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
-8
+0
 
 CHOOSER
-108
-133
-200
-178
+1190
+230
+1282
+275
 strategy2
 strategy2
 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
-8
+0
 
 TEXTBOX
-932
-15
-1172
-33
+1476
+110
+1716
+128
 Params for SwitchingMatrix strategies\n
 12
 0.0
@@ -1556,10 +1786,10 @@ Params for WeightedMemory strategies
 1
 
 SLIDER
-1289
-369
-1461
-402
+1472
+247
+1644
+280
 the-b
 the-b
 0
@@ -1571,25 +1801,25 @@ NIL
 HORIZONTAL
 
 SLIDER
-1297
-383
-1469
-416
-the-r
-the-r
-0
-1
-0.0
-0.1
-1
-NIL
-HORIZONTAL
-
-SLIDER
-1308
-393
 1480
-426
+261
+1652
+294
+the-r
+the-r
+0
+1
+0.0
+0.1
+1
+NIL
+HORIZONTAL
+
+SLIDER
+1491
+271
+1663
+304
 the-h
 the-h
 0
@@ -1601,10 +1831,10 @@ NIL
 HORIZONTAL
 
 MONITOR
-1321
-403
-1378
-448
+1504
+281
+1561
+326
 the-x
 1 - the-h - the-b - the-r
 17
@@ -1612,10 +1842,10 @@ the-x
 11
 
 MONITOR
-497
-27
-594
-92
+490
+30
+587
+95
 gini index
 gini-index [wealth] of turtles
 3
@@ -1623,50 +1853,50 @@ gini-index [wealth] of turtles
 16
 
 SLIDER
-1269
-149
-1483
-182
+932
+49
+1146
+82
 num-param-pop-mutations
 num-param-pop-mutations
 1
 10
-5.0
+0.0
 1
 1
 NIL
 HORIZONTAL
 
 TEXTBOX
-1273
-124
-1468
-143
+936
+24
+1131
+43
 Population GA parameters
 12
 0.0
 1
 
 SLIDER
-1271
-234
-1472
-267
+934
+134
+1135
+167
 mutation-probability
 mutation-probability
 0
 1
-0.8
+0.0
 0.05
 1
 NIL
 HORIZONTAL
 
 SLIDER
-1265
-278
-1486
-311
+928
+178
+1149
+211
 contraction-magnitude
 contraction-magnitude
 0
@@ -1678,10 +1908,10 @@ NIL
 HORIZONTAL
 
 SLIDER
-1264
-315
-1483
-348
+942
+186
+1161
+219
 contraction-probability
 contraction-probability
 0
@@ -1693,10 +1923,10 @@ NIL
 HORIZONTAL
 
 BUTTON
-14
-435
-112
-468
+15
+330
+115
+363
 CLEAR ALL
 clear-output\nclear-all\nrandom-seed 2345
 NIL
@@ -1710,10 +1940,10 @@ NIL
 1
 
 BUTTON
-13
-391
-118
-424
+15
+290
+115
+323
 Run Ng Gens
 repeat Ng * num-param-pop-mutations [\n  setup\n  repeat 100 [ go ]\n  finish-game\n]
 NIL
@@ -1727,36 +1957,36 @@ NIL
 1
 
 INPUTBOX
-129
-404
-198
-464
+130
+290
+199
+350
 Ng
-50.0
+0.0
 1
 0
 Number
 
 SLIDER
-933
-111
-1158
-144
+1467
+124
+1692
+157
 mutation-magnitude-sp
 mutation-magnitude-sp
 0
 1
-0.81
+0.0
 0.01
 1
 NIL
 HORIZONTAL
 
 SWITCH
-13
-345
-201
-378
+15
+180
+203
+213
 use-meta-ga?
 use-meta-ga?
 1
@@ -1764,10 +1994,10 @@ use-meta-ga?
 -1000
 
 BUTTON
-940
-160
-1152
-193
+1509
+156
+1721
+189
 ARGH NOT A SWEET SPOT
 set percent-to-replace 1\nset num-variants 1\nset mutation-magnitude-sp 0.5
 NIL
@@ -1781,10 +2011,10 @@ NIL
 1
 
 BUTTON
-939
-213
-1133
-246
+1518
+175
+1712
+208
 Default to one static S
 set percent-to-replace 0\nset num-variants 1\nset mutation-magnitude-sp 0
 NIL
@@ -1796,6 +2026,228 @@ NIL
 NIL
 NIL
 1
+
+SWITCH
+1469
+416
+1608
+449
+use-sharing?
+use-sharing?
+1
+1
+-1000
+
+BUTTON
+1463
+347
+1713
+380
+print all turtle S-variants to console
+ask turtles [ show map last get-data \"S-variants\" ]
+NIL
+1
+T
+OBSERVER
+NIL
+NIL
+NIL
+NIL
+1
+
+SLIDER
+1533
+190
+1705
+223
+max-variants
+max-variants
+0
+100
+0.0
+1
+1
+NIL
+HORIZONTAL
+
+SWITCH
+1474
+460
+1610
+493
+use-groups?
+use-groups?
+1
+1
+-1000
+
+SLIDER
+1457
+505
+1629
+538
+num-groups
+num-groups
+0
+100
+0.0
+1
+1
+NIL
+HORIZONTAL
+
+BUTTON
+1470
+371
+1618
+404
+Matrices of turtle 0
+ask turtle 0 [\nlet sv get-data \"S-variants\"\nforeach sv [s ->\n  print last s\n  let ss (map [i -> nested-precision i 2] but-last s)\n  foreach ss print\n  print \"\"\n]\n]
+NIL
+1
+T
+OBSERVER
+NIL
+NIL
+NIL
+NIL
+1
+
+SLIDER
+1478
+50
+1650
+83
+m
+m
+0
+50
+0.0
+1
+1
+NIL
+HORIZONTAL
+
+SWITCH
+15
+215
+205
+248
+print-ga-to-console?
+print-ga-to-console?
+1
+1
+-1000
+
+SLIDER
+939
+227
+1111
+260
+keep-mutations
+keep-mutations
+0
+20
+0.0
+1
+1
+NIL
+HORIZONTAL
+
+MONITOR
+695
+25
+862
+90
+NIL
+generation-count
+17
+1
+16
+
+INPUTBOX
+1335
+195
+1450
+268
+the-seed
+0.0
+1
+0
+Number
+
+SWITCH
+15
+250
+205
+283
+use-gini-in-fitness?
+use-gini-in-fitness?
+0
+1
+-1000
+
+BUTTON
+15
+370
+115
+403
+Assign pop
+assign-params-to-turtles pop
+NIL
+1
+T
+OBSERVER
+NIL
+NIL
+NIL
+NIL
+1
+
+BUTTON
+121
+370
+206
+403
+Clear pop
+set pop 0
+NIL
+1
+T
+OBSERVER
+NIL
+NIL
+NIL
+NIL
+1
+
+BUTTON
+1185
+85
+1429
+118
+Show ORDERED turtle params
+show map [ i -> [ get-data \"params\" ] of turtle i ] (range count turtles)
+NIL
+1
+T
+OBSERVER
+NIL
+NIL
+NIL
+NIL
+1
+
+SWITCH
+620
+10
+837
+43
+use-tournament-turtle
+use-tournament-turtle
+1
+1
+-1000
 
 @#$#@#$#@
 ## WHAT IS IT?
@@ -2364,7 +2816,7 @@ NetLogo 6.0.2
   </experiment>
   <experiment name="GA" repetitions="1" runMetricsEveryStep="false">
     <setup>clear-all
-random-seed 2345</setup>
+random-seed the-seed</setup>
     <go>repeat Ng * num-param-pop-mutations [
   setup
   repeat 100 [ go ]
@@ -2372,11 +2824,27 @@ random-seed 2345</setup>
 ]</go>
     <timeLimit steps="1"/>
     <metric>mutation-history</metric>
+    <enumeratedValueSet variable="use-gini-in-fitness?">
+      <value value="true"/>
+      <value value="false"/>
+    </enumeratedValueSet>
     <enumeratedValueSet variable="N">
+      <value value="10"/>
       <value value="50"/>
+      <value value="100"/>
     </enumeratedValueSet>
     <enumeratedValueSet variable="tau">
       <value value="0"/>
+      <value value="0.33"/>
+      <value value="0.67"/>
+      <value value="1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="keep-mutations">
+      <value value="0"/>
+      <value value="2"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="the-seed">
+      <value value="2345"/>
     </enumeratedValueSet>
     <enumeratedValueSet variable="percent-to-replace">
       <value value="1"/>
@@ -2391,19 +2859,72 @@ random-seed 2345</setup>
       <value value="0"/>
     </enumeratedValueSet>
     <enumeratedValueSet variable="mem-size">
-      <value value="0"/>
+      <value value="4"/>
     </enumeratedValueSet>
     <enumeratedValueSet variable="mutation-probability">
       <value value="0.8"/>
     </enumeratedValueSet>
+    <enumeratedValueSet variable="mutation-magnitude">
+      <value value="0.2"/>
+    </enumeratedValueSet>
     <enumeratedValueSet variable="num-param-pop-mutations">
       <value value="5"/>
     </enumeratedValueSet>
+    <enumeratedValueSet variable="Ng">
+      <value value="200"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="GA - single run" repetitions="1" runMetricsEveryStep="false">
+    <setup>clear-all
+random-seed the-seed</setup>
+    <go>repeat Ng * num-param-pop-mutations [
+  setup
+  repeat 100 [ go ]
+  finish-game
+]</go>
+    <timeLimit steps="1"/>
+    <metric>mutation-history</metric>
+    <enumeratedValueSet variable="use-gini-in-fitness?">
+      <value value="true"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="N">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="tau">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="keep-mutations">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="the-seed">
+      <value value="2345"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="percent-to-replace">
+      <value value="1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="num-variants">
+      <value value="1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="mutation-magnitude-sp">
+      <value value="1"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="p">
+      <value value="0"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="mem-size">
+      <value value="4"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="mutation-probability">
+      <value value="0.8"/>
+    </enumeratedValueSet>
     <enumeratedValueSet variable="mutation-magnitude">
-      <value value="0.4"/>
+      <value value="0.2"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="num-param-pop-mutations">
+      <value value="5"/>
     </enumeratedValueSet>
     <enumeratedValueSet variable="Ng">
-      <value value="50"/>
+      <value value="200"/>
     </enumeratedValueSet>
   </experiment>
 </experiments>
@@ -2420,5 +2941,5 @@ true
 Line -7500403 true 150 150 90 180
 Line -7500403 true 150 150 210 180
 @#$#@#$#@
-0
+1
 @#$#@#$#@
